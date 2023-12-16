@@ -1,0 +1,6 @@
+TYPICAL VALUES
+pearson: 75 for 42.66
+shared: 98 for 630
+user average diff: -37 for -17; - 18 because negative
+global user average diff: (0.3x)^2 = -5 for -7 
+shared 10s: 24 for 7/8, 32 for 8/8

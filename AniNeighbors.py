@@ -27,6 +27,14 @@ import math
 import pandas as pd
 import csv
 
+import configparser
+
+config = configparser.RawConfigParser()
+config.read('config.cfg')
+
+weights = dict(config.items('WEIGHTS'))
+print(weights)
+
 
 map = {}
 username = "brettyoshi9"
@@ -101,7 +109,7 @@ def makeUserDFFromResponse(response, userId):
             userList.loc[anime['mediaId']] = [userId, anime['media']['title']['romaji'], anime['mediaId'], anime['scoreRaw'], anime['status']]
     # if(userId != global_user_id):
     if(userId == global_user_id):
-        global_user_anime_count = anime_count
+        global_user_anime_count = len(userList)
     AnimeLists[list_owner] = userList
     return userList
 
@@ -166,7 +174,61 @@ def getShared10s(userList):
     
     return shared_10s, total_10s
 
-stats = pd.DataFrame(columns='name, anime_count, merged mean, reduces mean by, hoh, pearson, shared10s'.split(', '))
+def get_anime_count_score(stats_df, scores_df):
+    # With 800 anime
+    # Should be aiming for 250-500 which is 0.3125 - 0.625
+
+    # With 200 anime
+    # should be aiming for 60-120 which is 0.3 - 0.6
+
+    # Calculate count_percentage based on the anime_count column
+    stats_df['count_percentage'] = stats_df['anime_count'] / global_user_anime_count
+
+    # # Map the input value to the desired range using a non-linear function based on 0.6 = 8 and 0.3 = 2
+    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(-1.66666666 * x + 27.77777* pow(x, 2), 10) * float(weights['shared_count_weight']))
+    
+    # # Drop the intermediate 'count_percentage' column
+    print(stats_df)
+    scores_df = stats_df.drop('count_percentage', axis=1)
+
+    return scores_df
+
+def get_shared_10s_score(stats_df, scores_df):
+        scores_df['shared_10s_score'] = stats_df['shared10s'].apply(lambda x: min(10 * x, 10) * float(weights['shared_10s_weight']))
+
+def get_mean_score_scores(stats_df, scores_df):
+    # global user mean score diff
+    # 0 diff = 0
+    # 5 diff = -10
+    scores_df['global_user_mean_diff_score'] = stats_df['reduces mean by'].apply(lambda x: max(2 *-abs(x), -10) * float(weights['global_user_avg_diff_weight']))
+
+    # user mean score diff
+    # 0 diff = 0
+    # 10 diff = -10
+    scores_df['user_mean_diff_score'] = stats_df['user mean diff'].apply(lambda x: max(-abs(x), -10) * float(weights['user_avg_diff_weight']))
+    
+
+def get_pearson_score(stats_df, scores_df):
+    # 1 = 10
+    # 0 = 0
+    # -1 = -10
+    scores_df['pearson_score'] = stats_df['pearson'].apply(lambda x: 10 * x * float(weights['pearson_weight']))
+
+
+def calculate_scores(stats_df):
+    scores_df = pd.DataFrame()
+    scores_df['name'] = stats_df['name']
+    get_anime_count_score(stats_df, scores_df)
+    get_shared_10s_score(stats_df, scores_df)
+    get_mean_score_scores(stats_df, scores_df)
+    get_pearson_score(stats_df, scores_df)
+    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['pearson_score']
+    scores_df = scores_df.sort_values(by='final_score', ascending=False)
+    print(scores_df)
+    return scores_df
+
+
+stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s'.split(', '))
 for username in AnimeLists:
     list = AnimeLists[username]
     list_owner = username
@@ -195,14 +257,28 @@ for username in AnimeLists:
 
     # Find the amount of shared 10s
     shared_10s, total_10s = getShared10s(merged_data)
-    print(shared_10s, total_10s)
 
     # Find the users new mean after merging
     user_list_new_average = merged_data['score_y'].mean()
     mean_diff = user_list_old_average - user_list_new_average
+    user_mean_diff = user_list_new_average - meanscore
 
+    # Find the pearson coefficient
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
-    print(pearson)
-    stats.loc[list_owner] = [list_owner, anime_count, meanscore, mean_diff, 0, pearson, shared_10s]
-    print(stats)
+
+    # # Find the cosine similarity
+    # # This should probably be normalized
+    # from sklearn.metrics.pairwise import cosine_similarity
+    # ratings_df = merged_data[['score_x', 'score_y']]
+    # ratings_df['score_x_zscore'] = (ratings_df['score_x'] - meanscore) / ratings_df['score_x'].std()
+    # ratings_df['score_y_zscore'] = (ratings_df['score_y'] - user_list_new_average) / ratings_df['score_y'].std()
+    # cosine_sim = cosine_similarity(ratings_df['score_x_zscore'].values.reshape(1, -1), ratings_df['score_y_zscore'].values.reshape(1, -1))[0][0]
+    # print(cosine_sim)
+    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, 0, pearson, shared_10s / total_10s]
+print(stats)
+scores = calculate_scores(stats)
+print(scores)
+
+# write the scores to a csv
+scores.to_csv('Results/scores.csv', index=False)
