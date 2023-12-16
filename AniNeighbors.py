@@ -76,17 +76,6 @@ query {
 }
 
 '''
-# Query to get all following 
-# {
-#   Page(page: 1) {
-#     pageInfo {
-#       lastPage
-#     }
-#     following(userId: 242203) {
-#       name
-#     }
-#   }
-# }
 
 AnimeLists = {}
 global_user_anime_count = -1
@@ -97,11 +86,7 @@ def makeUserDFFromResponse(response, userId):
     if(user == None):
         return -1
     list_owner = user['name']
-    anime_count = 0
-    for animelist in response['data']['MediaListCollection']['lists']:
-        anime_count += len(animelist['entries'])
-    if(global_user_anime_count and anime_count < global_user_anime_count * 0.15):
-        return -1
+    print(list_owner, userId)
     userList = pd.DataFrame(columns='userid, title, media_id, score, status'.split(', '))
     for animelist in response['data']['MediaListCollection']['lists']:
         for anime in animelist['entries']:
@@ -110,11 +95,7 @@ def makeUserDFFromResponse(response, userId):
             if(anime['scoreRaw'] == 0):
                 continue
             userList.loc[anime['mediaId']] = [userId, anime['media']['title']['romaji'], anime['mediaId'], anime['scoreRaw'], anime['status']]
-    # if(userId != global_user_id):
-    if(userId == global_user_id):
-        global_user_anime_count = len(userList)
-    if(len(userList) > 0):
-        AnimeLists[list_owner] = userList
+    global_user_anime_count = len(userList)
     return userList
 
 def getUserListFromAPI(userId):
@@ -149,12 +130,6 @@ def getUserListFromAPI(userId):
 
 userList = getUserListFromAPI(global_user_id)
 
-# Get 80 random values in between 1 and 23000000
-for i in range(1, 80):
-    getUserListFromAPI(math.floor(100000 * random.random()))
-    
-
-print(AnimeLists.keys())
 
 def getShared10s(userList):
     with open("shared 10s.csv", newline="", encoding='latin1') as csvfile:
@@ -231,10 +206,23 @@ def calculate_scores(stats_df):
     print(scores_df)
     return scores_df
 
+user_data = pd.read_csv("UserData/data.csv")
+user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
+print("user data", user_data)
+unique_users = user_data['userid'].unique()
+print(unique_users)
+AnimeListsFromFile = {}
+for user in unique_users:
+    # Create a DataFrame filtered by the unique value
+    filtered_df = user_data[user_data['userid'] == user]
+    
+    # Store the filtered DataFrame in the dictionary
+    AnimeListsFromFile[user] = filtered_df
 
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s'.split(', '))
-for username in AnimeLists:
-    list = AnimeLists[username]
+for username in AnimeListsFromFile:
+    
+    list = AnimeListsFromFile[username]
     list_owner = username
 
     # Get the average of the user BEFORE merging
@@ -271,14 +259,6 @@ for username in AnimeLists:
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
 
-    # # Find the cosine similarity
-    # # This should probably be normalized
-    # from sklearn.metrics.pairwise import cosine_similarity
-    # ratings_df = merged_data[['score_x', 'score_y']]
-    # ratings_df['score_x_zscore'] = (ratings_df['score_x'] - meanscore) / ratings_df['score_x'].std()
-    # ratings_df['score_y_zscore'] = (ratings_df['score_y'] - user_list_new_average) / ratings_df['score_y'].std()
-    # cosine_sim = cosine_similarity(ratings_df['score_x_zscore'].values.reshape(1, -1), ratings_df['score_y_zscore'].values.reshape(1, -1))[0][0]
-    # print(cosine_sim)
     stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, 0, pearson, shared_10s / total_10s]
 print(stats)
 scores = calculate_scores(stats)
