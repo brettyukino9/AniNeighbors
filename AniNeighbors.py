@@ -28,7 +28,7 @@ import pandas as pd
 
 
 map = {}
-username = "higui"
+username = "brettyoshi9"
 
 # Make query to get user Id
 queryUserId = '''
@@ -44,7 +44,6 @@ url = 'https://graphql.anilist.co'
 
 # Make the HTTP Api request to get the user id of the username
 response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
-print(response)
 userId = response['data']['User']['id']
 
 # Define our query variables and values that will be used in the query request
@@ -84,20 +83,21 @@ print(userId)
 # }
 
 AnimeLists = {}
-def makeUserDFFromResponse(response):
+def makeUserDFFromResponse(response, userId):
     list_owner = response['data']['User']['name']
     anime_count = 0
     for animelist in response['data']['MediaListCollection']['lists']:
         anime_count += len(animelist['entries'])
-    print(anime_count)
     if(anime_count < 10):
         return -1
-    userList = pd.DataFrame(columns='title, media_id, score, status'.split(', '))
+    userList = pd.DataFrame(columns='userid, title, media_id, score, status'.split(', '))
     for animelist in response['data']['MediaListCollection']['lists']:
         for anime in animelist['entries']:
             if(anime['status'] == "PLANNING"):
                 continue
-            userList.loc[anime['mediaId']] = [anime['media']['title']['romaji'], anime['mediaId'], anime['scoreRaw'], anime['status']]
+            if(anime['scoreRaw'] == 0):
+                continue
+            userList.loc[anime['mediaId']] = [userId, anime['media']['title']['romaji'], anime['mediaId'], anime['scoreRaw'], anime['status']]
     AnimeLists[list_owner] = userList
     return userList
 
@@ -128,8 +128,11 @@ def getUserListFromAPI(userId):
         'listType': "ANIME"
     }
     response = requests.post(url, json={'query': queryUserList, 'variables': variables}).json()
-    makeUserDFFromResponse(response)
-    return response        
+    userList = makeUserDFFromResponse(response, userId)
+    return userList        
+
+userList = getUserListFromAPI(userId)
+
 
 for i in range(1, 3) :
     getUserListFromAPI(i)
@@ -140,17 +143,29 @@ print(AnimeLists.keys())
 stats = pd.DataFrame(columns='name, anime_count, meanscore, hoh, pearson, shared10s'.split(', '))
 for username in AnimeLists:
     list = AnimeLists[username]
-    print(f"{username} response{list}")
-    # Get the amount of anime that don't have the status of PLANNING
     list_owner = username
 
-    filtered_responses = list[list['score'] > 0]
-    
-    # Find the average of all scores that are above 0
-    meanscore = filtered_responses['score'].mean()
-    anime_count = len(list)
-    print(meanscore)
-    stats.loc[list_owner] = [list_owner, anime_count, meanscore, 0, 0, 0]
-    print(stats)
+    # Attach scores from userList that match the mediaId of the filtered_responses
+    merged_data = pd.merge(list, userList, on='media_id', how='left')
 
-                     
+    # Remove NaNs
+    merged_data = merged_data.dropna()
+
+    # Remove Duplicates
+    merged_data = merged_data.drop_duplicates(subset='media_id', keep='first')
+
+    # Sort by title_x
+    merged_data = merged_data.sort_values(by='score_y')
+    print(merged_data)
+
+    # Find the average of all scores that are above 0
+    meanscore = merged_data['score_x'].mean()
+
+    # Find the number of anime the user has watched
+    anime_count = len(merged_data)
+    
+    ratings_df = merged_data[['score_x', 'score_y']]
+    pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
+    print(pearson)
+    stats.loc[list_owner] = [list_owner, anime_count, meanscore, 0, pearson, 0]
+    print(stats)
