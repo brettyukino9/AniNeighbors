@@ -26,6 +26,7 @@ import sys
 import math
 import pandas as pd
 import csv
+import random as random
 
 import configparser
 
@@ -35,9 +36,8 @@ config.read('config.cfg')
 weights = dict(config.items('WEIGHTS'))
 print(weights)
 
-
-map = {}
-username = "brettyoshi9"
+username = dict(config.items('USERNAME'))['username']
+print(username)
 
 # Make query to get user Id
 queryUserId = '''
@@ -93,7 +93,10 @@ global_user_anime_count = -1
 
 def makeUserDFFromResponse(response, userId):
     global global_user_anime_count
-    list_owner = response['data']['User']['name']
+    user = response['data']['User']
+    if(user == None):
+        return -1
+    list_owner = user['name']
     anime_count = 0
     for animelist in response['data']['MediaListCollection']['lists']:
         anime_count += len(animelist['entries'])
@@ -110,7 +113,8 @@ def makeUserDFFromResponse(response, userId):
     # if(userId != global_user_id):
     if(userId == global_user_id):
         global_user_anime_count = len(userList)
-    AnimeLists[list_owner] = userList
+    if(len(userList) > 0):
+        AnimeLists[list_owner] = userList
     return userList
 
 def getUserListFromAPI(userId):
@@ -145,9 +149,9 @@ def getUserListFromAPI(userId):
 
 userList = getUserListFromAPI(global_user_id)
 
-
-for i in range(1, 3) :
-    getUserListFromAPI(i)
+# Get 80 random values in between 1 and 23000000
+for i in range(1, 80):
+    getUserListFromAPI(math.floor(100000 * random.random()))
     
 
 print(AnimeLists.keys())
