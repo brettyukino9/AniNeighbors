@@ -182,9 +182,23 @@ query ($page: Int, $userId: Int!) {
 #         getUserListFromAPI(user['id'])
 
 
-# Scrape User data
-users = [5996645, 300309, 452263]
-for userid in users:
+# Get users from a file if you want specific users
+users = []
+use_user_file = 1
+if(use_user_file):
+    with open('UserData/users_to_add.txt', newline='') as txtfile:
+        reader = csv.reader(txtfile, delimiter='\n')
+        for row in reader:
+            users.append(row[0])
+
+for username in users:
+    variablesUserId = {
+        'name': username
+    }
+    response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
+    userid = response['data']['User']['id']
+    import time
+    time.sleep(0.8)
     getUserListFromAPI(userid)
 
 # print(AnimeLists.keys())

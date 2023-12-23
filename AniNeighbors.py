@@ -257,14 +257,14 @@ stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, re
 
 print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
 for username in AnimeListsFromFile:
-    list = AnimeListsFromFile[username]
+    user_list = AnimeListsFromFile[username]
     list_owner = username
 
     # Get the average of the user BEFORE merging
     user_list_old_average = userList['score'].mean()
 
     # Attach scores from userList that match the mediaId of the filtered_responses
-    merged_data = pd.merge(list, userList, on='media_id', how='left')
+    merged_data = pd.merge(user_list, userList, on='media_id', how='left')
 
     # Remove NaNs
     merged_data = merged_data.dropna()
@@ -315,8 +315,64 @@ plt.hist(scores['final_score'], bins=50, range=[0,100])
 plt.show()
 
 ## TO DO: other metrics?? favorites lists?? 
-## hoh metric?? https://github.com/hohMiyazawa/Automail/blob/master/src/utilities.js#L860
-## TO DO: take the top users and get recommendations
 
 # write the scores to a csv
 scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
+
+
+
+# get the score of the user in the second row
+user_score = scores.iloc[1]['final_score']
+
+high_users = scores[scores['final_score'] > user_score * 0.7]
+top_users = high_users['name'].tolist()
+anime_list = []
+for username in top_users:
+    user_list = AnimeListsFromFile[username]
+    list_owner = username
+    anime_list = anime_list + user_list['title'].tolist()
+
+# drop duplicates in anime_list
+anime_list = list(set(anime_list))
+print(f"{len(anime_list)} unique anime")
+
+# make a users x anime matrix using each username and each unique anime
+user_anime_matrix = pd.DataFrame(columns=anime_list)
+for username in top_users:
+    list = AnimeListsFromFile[username]
+    user_anime_matrix.loc[username] = [0] * len(anime_list)
+    for index, row in list.iterrows():
+        anime = row['title']
+        user_anime_matrix.loc[username][anime] = row['score']
+
+# transpose the user anime matrix
+user_anime_matrix = user_anime_matrix.T
+
+# turn all the 0s into NaN
+user_anime_matrix = user_anime_matrix.replace(0, float('nan'))
+
+# get the z scores for each users anime
+user_anime_matrix = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
+print(user_anime_matrix)
+
+# calculate stats
+user_anime_matrix['mean z-score'] = user_anime_matrix.mean(axis=1)
+user_anime_matrix['number of ratings'] = user_anime_matrix.count(axis=1) - 1
+
+# remove lesser seen anime
+min_threshold = len(top_users) * 0.3
+user_anime_matrix = user_anime_matrix[user_anime_matrix['number of ratings'] > min_threshold]
+
+# remove anime on the users list
+user_anime_matrix = user_anime_matrix[~user_anime_matrix.index.isin(userList['title'])]
+
+# move the stats columns to the front
+rating_num = user_anime_matrix.pop('number of ratings')
+user_anime_matrix.insert(0, 'number of ratings', rating_num)
+mean_zscore = user_anime_matrix.pop('mean z-score')
+user_anime_matrix.insert(0, 'mean z-score', mean_zscore)
+
+# sort by mean z-score
+user_anime_matrix = user_anime_matrix.sort_values(by='mean z-score', ascending=False)
+
+user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)

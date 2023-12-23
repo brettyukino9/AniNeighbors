@@ -164,4 +164,5 @@ Proposal.py
 
 UserData/*.csv
 BigDataSets/*
-Results/*.csv
+Results/*
+Shared10s Lists/*
