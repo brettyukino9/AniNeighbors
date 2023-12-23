@@ -36,8 +36,10 @@ config.read('config.cfg')
 weights = dict(config.items('WEIGHTS'))
 print(weights)
 
-username = dict(config.items('USERNAME'))['username']
-print(username)
+global_username = dict(config.items('USERNAME'))['username']
+print(global_username)
+
+## TO DO ADD SHARED 10s to config
 
 # Make query to get user Id
 queryUserId = '''
@@ -46,7 +48,7 @@ query($name:String){User(name:$name){id}}
 
 # Define our query variables and values that will be used in the query request
 variablesUserId = {
-    'name': username
+    'name': global_username
 }
 
 url = 'https://graphql.anilist.co'
@@ -60,23 +62,6 @@ variables = {
     'userId': global_user_id
 }
 
-queryUserList = '''
-query {
-  MediaListCollection(userName: "USERNAME") {
-    lists {
-      entries {
-        media {
-          title {
-            romaji
-          }
-        }
-      }
-    }
-  }
-}
-
-'''
-
 AnimeLists = {}
 global_user_anime_count = -1
 
@@ -85,8 +70,6 @@ def makeUserDFFromResponse(response, userId):
     user = response['data']['User']
     if(user == None):
         return -1
-    list_owner = user['name']
-    print(list_owner, userId)
     userList = pd.DataFrame(columns='userid, title, media_id, score, status'.split(', '))
     for animelist in response['data']['MediaListCollection']['lists']:
         for anime in animelist['entries']:
@@ -155,7 +138,7 @@ def getShared10s(userList):
 
 def get_anime_count_score(stats_df, scores_df):
     # With 800 anime
-    # Should be aiming for 250-500 which is 0.3125 - 0.625
+    # Should be aiming for 200 - 500 which is 0.25 - 0.625
 
     # With 200 anime
     # should be aiming for 60-120 which is 0.3 - 0.6
@@ -163,16 +146,16 @@ def get_anime_count_score(stats_df, scores_df):
     # Calculate count_percentage based on the anime_count column
     stats_df['count_percentage'] = stats_df['anime_count'] / global_user_anime_count
 
-    # # Map the input value to the desired range using a non-linear function based on 0.6 = 8 and 0.3 = 2
-    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(-1.66666666 * x + 27.77777* pow(x, 2), 10) * float(weights['shared_count_weight']))
+    # # Map the input value to the desired range using a non-linear function based on 0.6 = 8 and 0.18 = 3
+    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(18.0952 * x +  -7.93651 * pow(x, 2), 10) * float(weights['shared_count_weight']))
     
     # # Drop the intermediate 'count_percentage' column
-    print(stats_df)
     scores_df = stats_df.drop('count_percentage', axis=1)
 
     return scores_df
 
 def get_shared_10s_score(stats_df, scores_df):
+        # TO DO : make max shared 10s the max a user gets, not the maximum put in
         scores_df['shared_10s_score'] = stats_df['shared10s'].apply(lambda x: min(10 * x, 10) * float(weights['shared_10s_weight']))
 
 def get_mean_score_scores(stats_df, scores_df):
@@ -203,10 +186,9 @@ def calculate_scores(stats_df):
     get_pearson_score(stats_df, scores_df)
     scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['pearson_score']
     scores_df = scores_df.sort_values(by='final_score', ascending=False)
-    print(scores_df)
     return scores_df
 
-user_data = pd.read_csv("UserData/data.csv")
+user_data = pd.read_csv("DataSets/higui_following.csv")
 user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
 print("user data", user_data)
 unique_users = user_data['userid'].unique()
@@ -215,13 +197,16 @@ AnimeListsFromFile = {}
 for user in unique_users:
     # Create a DataFrame filtered by the unique value
     filtered_df = user_data[user_data['userid'] == user]
-    
+
+    if(len(filtered_df) < global_user_anime_count * 0.10):
+        continue
+
     # Store the filtered DataFrame in the dictionary
     AnimeListsFromFile[user] = filtered_df
 
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s'.split(', '))
+
 for username in AnimeListsFromFile:
-    
     list = AnimeListsFromFile[username]
     list_owner = username
 
@@ -239,7 +224,6 @@ for username in AnimeListsFromFile:
 
     # Sort by title_x
     merged_data = merged_data.sort_values(by='score_y')
-    print(merged_data)
 
     # Find the average of all scores that are above 0
     meanscore = merged_data['score_x'].mean()
@@ -264,5 +248,7 @@ print(stats)
 scores = calculate_scores(stats)
 print(scores)
 
+## TO DO: other metrics?? favorites lists??
+
 # write the scores to a csv
-scores.to_csv('Results/scores.csv', index=False)
+scores.to_csv(f'Results/{global_username}_scores.csv', index=False)

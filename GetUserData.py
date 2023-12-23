@@ -27,6 +27,7 @@ import math
 import pandas as pd
 import csv
 import random as random
+import time
 
 import configparser
 
@@ -39,8 +40,7 @@ config.read('config.cfg')
 weights = dict(config.items('WEIGHTS'))
 print(weights)
 
-username = dict(config.items('USERNAME'))['username']
-print(username)
+username = "higui"
 
 # Make query to get user Id
 queryUserId = '''
@@ -94,11 +94,12 @@ query {
 
 ## FILL ALL USER LIST DATA
 
-AnimeLists = {}
 global_user_anime_count = -1
 
 def makeUserDFFromResponse(response, userId):
     global global_user_anime_count
+    if(response['data'] == None):
+        return -1
     user = response['data']['User']
     if(user == None):
         return -1
@@ -121,7 +122,6 @@ def makeUserDFFromResponse(response, userId):
     if(userId == global_user_id):
         global_user_anime_count = len(userList)
     if(len(userList) > 0):
-        AnimeLists[list_owner] = userList
         userList.to_csv('UserData/data.csv', mode='a', header=False, index=False)
     return userList
 
@@ -157,9 +157,34 @@ def getUserListFromAPI(userId):
 
 userList = getUserListFromAPI(global_user_id)
 
-# Get 80 random values in between 1 and 23000000
-for i in range(1, 80):
-    getUserListFromAPI(math.floor(6000000 * random.random()))
+
+queryAllFollowing = '''
+query ($page: Int, $userId: Int!) {
+    Page(page: $page) {
+        pageInfo {
+        lastPage
+        }
+        following(userId: $userId) {
+        name
+        id
+        }
+    }
+    }
+'''
+# for i in range(1, 101):
+#     variables = {
+#         'userId': global_user_id,
+#         'page': i
+#     }
+#     print("page ", i)
+#     response = requests.post(url, json={'query': queryAllFollowing, 'variables': variables}).json()
+#     for user in response['data']['Page']['following']:
+#         getUserListFromAPI(user['id'])
+
+
+# Scrape User data
+for i in range(1, 8000000):
+    getUserListFromAPI(i)
 
 # print(AnimeLists.keys())
 
