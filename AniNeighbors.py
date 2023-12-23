@@ -211,7 +211,8 @@ def calculate_scores(stats_df):
     scores_df = scores_df.sort_values(by='final_score', ascending=False)
     return scores_df
 
-user_data = pd.read_csv("DataSets/higui_following_edited.csv")
+# Read in all the user data
+user_data = pd.read_csv("BigDataSets/brettyoshi9 top people combined.csv")
 user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
 print("user data", user_data)
 
@@ -233,13 +234,14 @@ import time
 start = time.time()
 user_count = 0
 
+# Convert the CSV to a bunch of anime lists
 for user in unique_users:
     user_count += 1
     if(user in low_users_list):
         continue
     # use this if you want to go through fast and skip users
-    # if(user_count % 10 != 0):
-    #     continue
+    if(user_count % 10 != 0):
+        continue
 
     # Create a DataFrame for the anime only from the specific user
     filtered_df = user_data[user_data['userid'] == user]
@@ -304,9 +306,14 @@ print(scores)
 scores['final_score'] = scores['final_score'] / max_score * 100
 print(scores)
 
+# save a list of low scoring users so you can save time ignoring them next time its run
 low_users = scores[scores['final_score'] < 20]
 print(low_users)
-low_users.to_csv(f'Results/{global_username}_low_users.csv', index=False)
+
+if(file_exists) :
+    low_users.to_csv(f'Results/{global_username}_low_users.csv', mode='a', index=False, header=False)
+else:
+    low_users.to_csv(f'Results/{global_username}_low_users.csv', index=False)
 
 import matplotlib.pyplot as plt
 
@@ -320,9 +327,11 @@ plt.show()
 scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
 
 
+## GENERATE RECOMMENDATIONS
+# TO DO: normalize based on anilist score
 
 # get the score of the user in the second row
-user_score = scores.iloc[1]['final_score']
+user_score = scores.iloc[2]['final_score']
 
 high_users = scores[scores['final_score'] > user_score * 0.7]
 top_users = high_users['name'].tolist()
@@ -374,5 +383,58 @@ user_anime_matrix.insert(0, 'mean z-score', mean_zscore)
 
 # sort by mean z-score
 user_anime_matrix = user_anime_matrix.sort_values(by='mean z-score', ascending=False)
+
+animeAverageScoreQuery = '''
+query GetAnimeAverageScore($animeName: String!) {
+  Media(search: $animeName, type: ANIME) {
+    title {
+      romaji
+    }
+    averageScore
+  }
+}
+'''
+
+import numpy as np
+user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 0.5]
+user_anime_matrix['anilist score'] = np.nan
+aniist_scores = user_anime_matrix.pop('anilist score')
+user_anime_matrix.insert(1, 'anilist score', aniist_scores)
+
+# iterate through each row in the user anime matrix
+for index, row in user_anime_matrix.iterrows():
+    # get the anime name
+    animeName = index
+    # Define our query variables and values that will be used in the query request
+    variables = {
+        'animeName': animeName
+    }
+    # Make the HTTP Api request to get the average score of the anime
+    response = requests.post(url, json={'query': animeAverageScoreQuery, 'variables': variables}).json()
+    averageScore = response['data']['Media']['averageScore']
+    time.sleep(1)
+    # If the average score is null, skip the anime
+    if averageScore is not None:
+        # Assign the average score to the 'anilist score' column directly
+        user_anime_matrix.at[index, 'anilist score'] = averageScore
+
+print(user_anime_matrix)
+
+
+# get the average score for the entire matrix
+anilist_global_average_score = 75
+anilist_global_stdev = 10
+print(anilist_global_average_score, anilist_global_stdev)
+user_anime_matrix['anilist z-score'] = (user_anime_matrix['anilist score'] - anilist_global_average_score) / anilist_global_stdev
+user_anime_matrix['z score diff'] = user_anime_matrix['mean z-score'] - user_anime_matrix['anilist z-score']
+
+# drop anilist z score
+user_anime_matrix = user_anime_matrix.drop('anilist z-score', axis=1)
+
+# sort by z score diff
+user_anime_matrix = user_anime_matrix.sort_values(by='z score diff', ascending=False)
+
+z_score_diff = user_anime_matrix.pop('z score diff')
+user_anime_matrix.insert(0, 'z score diff', z_score_diff)
 
 user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
