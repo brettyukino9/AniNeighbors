@@ -183,8 +183,9 @@ query ($page: Int, $userId: Int!) {
 
 
 # Scrape User data
-for i in range(1, 8000000):
-    getUserListFromAPI(i)
+users = [5996645, 300309, 452263]
+for userid in users:
+    getUserListFromAPI(userid)
 
 # print(AnimeLists.keys())
 

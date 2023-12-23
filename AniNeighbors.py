@@ -35,9 +35,13 @@ config.read('config.cfg')
 
 weights = dict(config.items('WEIGHTS'))
 print(weights)
-
+max_score = (float(weights['pearson_weight']) + float(weights['shared_count_weight']) + float(weights['shared_10s_weight']) + float(weights['hoh_weight'])) * 10
+print(max_score)
 global_username = dict(config.items('USERNAME'))['username']
 print(global_username)
+
+options = dict(config.items('OPTIONS'))
+calculate_all = options['calculate_all']
 
 ## TO DO ADD SHARED 10s to config
 
@@ -122,9 +126,9 @@ def getShared10s(userList):
         userList.sort_values(by='score_x')
         average = userList['score_x'].mean()
         stdev = userList['score_x'].std()
-        userList['zscore'] = (userList['score_x'] - average) / stdev
-        userList = userList.sort_values(by='zscore', ascending=False)
-        normalizedUserList = userList[userList['zscore'] > 0.85]
+        userList['zscore_x'] = (userList['score_x'] - average) / stdev
+        userList = userList.sort_values(by='zscore_x', ascending=False)
+        normalizedUserList = userList[userList['zscore_x'] > 0.9]
         for row in rows :
             total_10s += 1
             anime = row[0]
@@ -136,6 +140,16 @@ def getShared10s(userList):
     
     return shared_10s, total_10s
 
+def get_hoh_value(userList):
+    y_average = userList['score_y'].mean()
+    y_stdev = userList['score_y'].std()
+    userList['zscore_y'] = (userList['score_y'] - y_average) / y_stdev
+    # find the difference in z score for each row and average it
+    userList['zscore_diff'] = abs(userList['zscore_y'] - userList['zscore_x'])
+    hoh_value = userList['zscore_diff'].mean()
+    userList.drop('zscore_diff', axis=1, inplace=True)
+    return hoh_value
+
 def get_anime_count_score(stats_df, scores_df):
     # With 800 anime
     # Should be aiming for 200 - 500 which is 0.25 - 0.625
@@ -146,8 +160,11 @@ def get_anime_count_score(stats_df, scores_df):
     # Calculate count_percentage based on the anime_count column
     stats_df['count_percentage'] = stats_df['anime_count'] / global_user_anime_count
 
-    # # Map the input value to the desired range using a non-linear function based on 0.6 = 8 and 0.18 = 3
-    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(18.0952 * x +  -7.93651 * pow(x, 2), 10) * float(weights['shared_count_weight']))
+    # # Map the input value to the desired range using a non-linear function based on
+    # 0.15 - 1
+    # 0.3 - 5
+    # 0.6 - 10
+    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(36.6666 * x +  -22.22222 * pow(x, 2) - 4, 10) * float(weights['shared_count_weight']))
     
     # # Drop the intermediate 'count_percentage' column
     scores_df = stats_df.drop('count_percentage', axis=1)
@@ -170,6 +187,11 @@ def get_mean_score_scores(stats_df, scores_df):
     scores_df['user_mean_diff_score'] = stats_df['user mean diff'].apply(lambda x: max(-abs(x), -10) * float(weights['user_avg_diff_weight']))
     
 
+def get_hoh_score(stats_df, scores_df):
+    # 0.6 = 10
+    # 1 = 0
+    scores_df['hoh_score'] = stats_df['hoh'].apply(lambda x: min((-25*x+25),10) * float(weights['hoh_weight']))
+
 def get_pearson_score(stats_df, scores_df):
     # 1 = 10
     # 0 = 0
@@ -183,29 +205,57 @@ def calculate_scores(stats_df):
     get_anime_count_score(stats_df, scores_df)
     get_shared_10s_score(stats_df, scores_df)
     get_mean_score_scores(stats_df, scores_df)
+    get_hoh_score(stats_df, scores_df)
     get_pearson_score(stats_df, scores_df)
-    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['pearson_score']
+    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
     scores_df = scores_df.sort_values(by='final_score', ascending=False)
     return scores_df
 
-user_data = pd.read_csv("DataSets/higui_following.csv")
+user_data = pd.read_csv("DataSets/higui_following_edited.csv")
 user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
 print("user data", user_data)
+
 unique_users = user_data['userid'].unique()
 print(unique_users)
-AnimeListsFromFile = {}
-for user in unique_users:
-    # Create a DataFrame filtered by the unique value
-    filtered_df = user_data[user_data['userid'] == user]
 
-    if(len(filtered_df) < global_user_anime_count * 0.10):
+# skip users already calculating to not be high
+low_users_path = f"Results/{global_username}_low_users.csv"
+from os.path import exists
+file_exists = exists(low_users_path)
+low_users_list = []
+if(file_exists and calculate_all == "False"):
+    low_users = pd.read_csv(f"Results/{global_username}_low_users.csv")
+    low_users_list = low_users['name'].tolist()
+
+AnimeListsFromFile = {}
+
+import time
+start = time.time()
+user_count = 0
+
+for user in unique_users:
+    user_count += 1
+    if(user in low_users_list):
         continue
+    # use this if you want to go through fast and skip users
+    # if(user_count % 10 != 0):
+    #     continue
+
+    # Create a DataFrame for the anime only from the specific user
+    filtered_df = user_data[user_data['userid'] == user]
 
     # Store the filtered DataFrame in the dictionary
     AnimeListsFromFile[user] = filtered_df
+    
+    if(user_count % 100 == 0):
+        end = time.time()
+        avg = (end - start) / user_count
+        print("time left: ", avg * (len(unique_users) - user_count) / 60, " minutes")
+
 
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s'.split(', '))
 
+print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
 for username in AnimeListsFromFile:
     list = AnimeListsFromFile[username]
     list_owner = username
@@ -234,6 +284,9 @@ for username in AnimeListsFromFile:
     # Find the amount of shared 10s
     shared_10s, total_10s = getShared10s(merged_data)
 
+    # Find the hoh value
+    hoh_value = get_hoh_value(merged_data)
+
     # Find the users new mean after merging
     user_list_new_average = merged_data['score_y'].mean()
     mean_diff = user_list_old_average - user_list_new_average
@@ -242,13 +295,28 @@ for username in AnimeListsFromFile:
     # Find the pearson coefficient
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
-
-    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, 0, pearson, shared_10s / total_10s]
+    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s]
 print(stats)
 scores = calculate_scores(stats)
 print(scores)
 
-## TO DO: other metrics?? favorites lists??
+# normalize final score based on max score
+scores['final_score'] = scores['final_score'] / max_score * 100
+print(scores)
+
+low_users = scores[scores['final_score'] < 20]
+print(low_users)
+low_users.to_csv(f'Results/{global_username}_low_users.csv', index=False)
+
+import matplotlib.pyplot as plt
+
+# make a histogram with the final scores
+plt.hist(scores['final_score'], bins=50, range=[0,100])
+plt.show()
+
+## TO DO: other metrics?? favorites lists?? 
+## hoh metric?? https://github.com/hohMiyazawa/Automail/blob/master/src/utilities.js#L860
+## TO DO: take the top users and get recommendations
 
 # write the scores to a csv
 scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
