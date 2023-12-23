@@ -240,8 +240,6 @@ for user in unique_users:
     if(user in low_users_list):
         continue
     # use this if you want to go through fast and skip users
-    if(user_count % 10 != 0):
-        continue
 
     # Create a DataFrame for the anime only from the specific user
     filtered_df = user_data[user_data['userid'] == user]
@@ -361,15 +359,16 @@ user_anime_matrix = user_anime_matrix.T
 user_anime_matrix = user_anime_matrix.replace(0, float('nan'))
 
 # get the z scores for each users anime
-user_anime_matrix = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
-print(user_anime_matrix)
+user_anime_matrix_normalized = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
+print(user_anime_matrix_normalized)
 
 # calculate stats
-user_anime_matrix['mean z-score'] = user_anime_matrix.mean(axis=1)
-user_anime_matrix['number of ratings'] = user_anime_matrix.count(axis=1) - 1
+user_anime_matrix['average score'] = user_anime_matrix.mean(axis=1)
+user_anime_matrix['mean z-score'] = user_anime_matrix_normalized.mean(axis=1)
+user_anime_matrix['number of ratings'] = user_anime_matrix_normalized.count(axis=1)
 
 # remove lesser seen anime
-min_threshold = len(top_users) * 0.3
+min_threshold = len(top_users) * 0.3 * 0.5
 user_anime_matrix = user_anime_matrix[user_anime_matrix['number of ratings'] > min_threshold]
 
 # remove anime on the users list
@@ -396,7 +395,7 @@ query GetAnimeAverageScore($animeName: String!) {
 '''
 
 import numpy as np
-user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 0.5]
+user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 1.0]
 user_anime_matrix['anilist score'] = np.nan
 aniist_scores = user_anime_matrix.pop('anilist score')
 user_anime_matrix.insert(1, 'anilist score', aniist_scores)
@@ -422,19 +421,17 @@ print(user_anime_matrix)
 
 
 # get the average score for the entire matrix
-anilist_global_average_score = 75
-anilist_global_stdev = 10
-print(anilist_global_average_score, anilist_global_stdev)
-user_anime_matrix['anilist z-score'] = (user_anime_matrix['anilist score'] - anilist_global_average_score) / anilist_global_stdev
-user_anime_matrix['z score diff'] = user_anime_matrix['mean z-score'] - user_anime_matrix['anilist z-score']
+user_anime_matrix['average score diff'] = user_anime_matrix['average score'] - user_anime_matrix['anilist score']
 
-# drop anilist z score
-user_anime_matrix = user_anime_matrix.drop('anilist z-score', axis=1)
+user_anime_matrix['Recommendation Score'] = 2 * user_anime_matrix['mean z-score'] + user_anime_matrix['average score diff'] * 0.2
 
-# sort by z score diff
-user_anime_matrix = user_anime_matrix.sort_values(by='z score diff', ascending=False)
+# normalized based on the max recommendation score
+user_anime_matrix['Recommendation Score'] = user_anime_matrix['Recommendation Score'] / user_anime_matrix['Recommendation Score'].max() * 100
 
-z_score_diff = user_anime_matrix.pop('z score diff')
-user_anime_matrix.insert(0, 'z score diff', z_score_diff)
+# sort by recommendation score
+user_anime_matrix = user_anime_matrix.sort_values(by='Recommendation Score', ascending=False)
+
+rec_score = user_anime_matrix.pop('Recommendation Score')
+user_anime_matrix.insert(0, 'Recommendation Score', rec_score)
 
 user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
