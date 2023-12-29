@@ -150,6 +150,27 @@ def get_hoh_value(userList):
     userList.drop('zscore_diff', axis=1, inplace=True)
     return hoh_value
 
+def get_brett_value(userList):
+    # compare the two users by iterating through every anime. check if anime one is rated higher than anime two. check if the users match in their rating. get the percentage of matches.
+    agrees = 0
+    disagrees = 0
+    for index, row in userList.iterrows():
+        for index2, row2 in userList.iterrows():
+            if(index2  <= index):
+                continue
+            user1_score_diff = row['score_x'] - row2['score_x']
+            user2_score_diff = row['score_y'] - row2['score_y']
+            if(user1_score_diff > 0 and user2_score_diff > 0):
+                agrees+=1
+            elif(user1_score_diff < 0 and user2_score_diff < 0):
+                agrees+=1
+            elif(user1_score_diff == 0 and user2_score_diff == 0):
+                agrees+=1
+            else:
+                disagrees+=1
+    return agrees / (agrees + disagrees)
+    
+
 def get_anime_count_score(stats_df, scores_df):
     # With 800 anime
     # Should be aiming for 200 - 500 which is 0.25 - 0.625
@@ -240,6 +261,8 @@ for user in unique_users:
     if(user in low_users_list):
         continue
     # use this if you want to go through fast and skip users
+    if(user_count % 50 != 0):
+        continue
 
     # Create a DataFrame for the anime only from the specific user
     filtered_df = user_data[user_data['userid'] == user]
@@ -253,7 +276,7 @@ for user in unique_users:
         print("time left: ", avg * (len(unique_users) - user_count) / 60, " minutes")
 
 
-stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s'.split(', '))
+stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
 
 print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
 for username in AnimeListsFromFile:
@@ -287,6 +310,8 @@ for username in AnimeListsFromFile:
     # Find the hoh value
     hoh_value = get_hoh_value(merged_data)
 
+    brett_value = get_brett_value(merged_data)
+    print(brett_value, username)
     # Find the users new mean after merging
     user_list_new_average = merged_data['score_y'].mean()
     mean_diff = user_list_old_average - user_list_new_average
@@ -295,7 +320,7 @@ for username in AnimeListsFromFile:
     # Find the pearson coefficient
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
-    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s]
+    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
 print(stats)
 scores = calculate_scores(stats)
 print(scores)
