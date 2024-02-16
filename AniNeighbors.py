@@ -151,7 +151,7 @@ def get_hoh_value(userList):
     return hoh_value
 
 def get_brett_value(userList):
-    # compare the two users by iterating through every anime. check if anime one is rated higher than anime two. check if the users match in their rating. get the percentage of matches.
+    # compare the two users by iterating through every anime. check if anime one is rated higher than anime two for a user. check if the other users agrees or disagrees. get the percentage of matches.
     agrees = 0
     disagrees = 0
     for index, row in userList.iterrows():
@@ -460,3 +460,36 @@ rec_score = user_anime_matrix.pop('Recommendation Score')
 user_anime_matrix.insert(0, 'Recommendation Score', rec_score)
 
 user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
+
+
+#  Yes, there are several ways to make this code more efficient. Here are a few suggestions:
+
+#     Use more efficient data structures: The code uses Pandas DataFrames, which are powerful but can be slow for large datasets. Consider using more efficient data structures like NumPy arrays or dictionaries for certain operations.
+#     Avoid unnecessary calculations: The code calculates the mean score of the user's anime watchlist twice (lines 4a and 14k). Consider storing the result of the first calculation and reusing it instead of recalculating it.
+#     Use vectorized operations: Pandas provides vectorized operations that can operate on entire columns or rows at once. Consider using these operations instead of looping through rows or columns.
+#     Reduce the number of merges: The code performs multiple merges (lines 4b and 14b) which can be slow. Consider combining the merge operations into a single operation.
+#     Use more efficient sorting: The code sorts the merged data by the 'score_y' column (line 4e). Consider using a more efficient sorting algorithm like numpy.argsort or pandas.DataFrame.sort_values with the kind parameter set to 'mergesort' or 'quicksort'.
+#     Avoid unnecessary data manipulation: The code drops NaN values (line 4c) and removes duplicates (line 4d) but then recalculates the mean score (line 14k) which may be affected by these operations. Consider performing these operations only when necessary.
+#     Use more efficient correlation calculation: The code calculates the Pearson correlation coefficient using the corr method (line 14m). Consider using a more efficient method like numpy.corrcoef or scipy.stats.pearsonr.
+#     Consider parallelizing: If the dataset is large, consider parallelizing the calculations using libraries like joblib or dask.
+
+
+# These are just a few suggestions, and the actual performance gains will depend on the specific dataset and operations being performed. It's important to profile the code and identify the bottlenecks before making optimizations.
+
+
+#  Yes, there are several ways to make this code more efficient. Here are a few suggestions:
+
+#     Use a consistent naming convention: The code uses both camelCase and snake_case naming conventions. It's better to stick to one convention throughout the code.
+#     Use type hints: The code doesn't have any type hints, which can make it harder to understand the data types being used. Adding type hints can make the code more readable and self-documenting.
+#     Avoid repetitive code: The code has several repeated lines of code, such as the merged_data manipulation steps. Consider extracting these steps into a separate function to reduce code duplication.
+#     Use more efficient data structures: The code uses Pandas DataFrames, which can be efficient for certain operations but may not be the best choice for others. Consider using other data structures, such as NumPy arrays or dictionaries, for certain calculations.
+#     Optimize the merge step: The pd.merge step can be computationally expensive. Consider using a more efficient merge algorithm, such as pd.merge_asof or pd.merge_ordered.
+#     Use vectorized operations: The code uses several loop-based operations, such as the getShared10s and get_hoh_value functions. Consider using vectorized operations, such as Pandas' apply or groupby functions, to reduce computational overhead.
+#     Consider parallelization: If the code is computationally intensive, consider using parallelization techniques, such as joblib or dask, to speed up the calculations.
+#     Simplify the scoring calculation: The scoring calculation involves several steps, including correlation coefficient calculation and normalization. Consider simplifying the scoring calculation to reduce computational overhead.
+#     Use a more efficient sorting algorithm: The code uses the sort_values method to sort the data, which can be slow for large datasets. Consider using a more efficient sorting algorithm, such as quicksort or mergesort.
+#     Profile the code: Use a profiling tool, such as line_profiler or cProfile, to identify the most time-consuming parts of the code. This can help you focus your optimization efforts on the most critical areas.
+
+
+# By implementing these suggestions, you can make the code more efficient and reduce its computational overhead.
+
