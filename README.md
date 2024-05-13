@@ -7,3 +7,5 @@ Enter your username into the config. You may also change the weights for each me
 Make sure to enter your favorites into the "shared_favorites.csv" file. Use romaji titles, one per line, and comma separated. 
 
 GetUserData can be used to compare yourself against a different group of Anilist users. A premade file I prepared is already in here with 5000 users in it.
+
+Currently takes a little over an hour to run on default settings. Use the 'every_n_users' setting in the config to speed it up by removing some users in the dataset.

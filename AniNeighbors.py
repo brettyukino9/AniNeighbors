@@ -233,7 +233,7 @@ def calculate_scores(stats_df):
     return scores_df
 
 # Read in all the user data
-user_data = pd.read_csv("BigDataSets/brettyoshi9 top people combined.csv")
+user_data = pd.read_csv("DataSets/higui_following_edited.csv")
 user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
 print("user data", user_data)
 
@@ -254,14 +254,16 @@ AnimeListsFromFile = {}
 import time
 start = time.time()
 user_count = 0
+every_n_users = int(options['every_n_users'])
 
 # Convert the CSV to a bunch of anime lists
 for user in unique_users:
     user_count += 1
     if(user in low_users_list):
         continue
-    # use this if you want to go through fast and skip users
-    if(user_count % 50 != 0):
+
+    # set this in the config if you want to go through fast and skip users
+    if(every_n_users > 1 and user_count % every_n_users != 0):
         continue
 
     # Create a DataFrame for the anime only from the specific user
@@ -279,7 +281,10 @@ for user in unique_users:
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
 
 print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
+start = time.time()
+user_count = 0
 for username in AnimeListsFromFile:
+    user_count += 1
     user_list = AnimeListsFromFile[username]
     list_owner = username
 
@@ -310,8 +315,10 @@ for username in AnimeListsFromFile:
     # Find the hoh value
     hoh_value = get_hoh_value(merged_data)
 
+    # TO DO: TEST TO MAKE SURE THIS WORKS
     brett_value = get_brett_value(merged_data)
     print(brett_value, username)
+    
     # Find the users new mean after merging
     user_list_new_average = merged_data['score_y'].mean()
     mean_diff = user_list_old_average - user_list_new_average
@@ -321,6 +328,12 @@ for username in AnimeListsFromFile:
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
     stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
+    if(user_count % 50 == 0):
+        end = time.time()
+        avg = (end - start) / user_count
+        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
+
+
 print(stats)
 scores = calculate_scores(stats)
 print(scores)
