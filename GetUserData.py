@@ -31,16 +31,15 @@ import time
 
 import configparser
 
+config = configparser.RawConfigParser()
+config.read('get_user_data_config.cfg')
+config_username = dict(config.items('USERNAME'))['username']
+print(config_username)
+
 with open('UserData/data.csv', 'w', newline='') as file:
     file.write('')
 
-config = configparser.RawConfigParser()
-config.read('config.cfg')
-
-weights = dict(config.items('WEIGHTS'))
-print(weights)
-
-username = "higui"
+username = config_username
 
 # Make query to get user Id
 queryUserId = '''
@@ -171,20 +170,23 @@ query ($page: Int, $userId: Int!) {
     }
     }
 '''
-# for i in range(1, 101):
-#     variables = {
-#         'userId': global_user_id,
-#         'page': i
-#     }
-#     print("page ", i)
-#     response = requests.post(url, json={'query': queryAllFollowing, 'variables': variables}).json()
-#     for user in response['data']['Page']['following']:
-#         getUserListFromAPI(user['id'])
+get_all_of_following = use_user_file = dict(config.items('OPTIONS'))['get_all_of_following']
+if(get_all_of_following):
+    for i in range(1, 101):
+        variables = {
+            'userId': global_user_id,
+            'page': i
+        }
+        print("page ", i)
+        response = requests.post(url, json={'query': queryAllFollowing, 'variables': variables}).json()
+        for user in response['data']['Page']['following']:
+            time.sleep(1.5)
+            getUserListFromAPI(user['id'])
 
 
 # Get users from a file if you want specific users
 users = []
-use_user_file = 1
+use_user_file = dict(config.items('OPTIONS'))['use_user_file']
 if(use_user_file):
     with open('UserData/users_to_add.txt', newline='') as txtfile:
         reader = csv.reader(txtfile, delimiter='\n')

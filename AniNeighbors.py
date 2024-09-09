@@ -39,6 +39,8 @@ max_score = (float(weights['pearson_weight']) + float(weights['shared_count_weig
 print(max_score)
 global_username = dict(config.items('USERNAME'))['username']
 print(global_username)
+users_file = dict(config.items('OPTIONS'))['users_file']
+print(users_file)
 
 options = dict(config.items('OPTIONS'))
 calculate_all = options['calculate_all']
@@ -233,7 +235,7 @@ def calculate_scores(stats_df):
     return scores_df
 
 # Read in all the user data
-user_data = pd.read_csv("DataSets/higui_following_edited.csv")
+user_data = pd.read_csv("DataSets/{file}".format(file=users_file))
 user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
 print("user data", user_data)
 
@@ -256,6 +258,7 @@ start = time.time()
 user_count = 0
 every_n_users = int(options['every_n_users'])
 
+print("First turning all user CSV data into Anime Lists:")
 # Convert the CSV to a bunch of anime lists
 for user in unique_users:
     user_count += 1
