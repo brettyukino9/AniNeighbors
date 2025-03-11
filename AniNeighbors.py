@@ -27,8 +27,13 @@ import math
 import pandas as pd
 import csv
 import random as random
-
+import cProfile
+import pstats
+import io
 import configparser
+
+profile = cProfile.Profile()
+profile.enable()
 
 config = configparser.RawConfigParser()
 config.read('config.cfg')
@@ -41,6 +46,8 @@ global_username = dict(config.items('USERNAME'))['username']
 print(global_username)
 users_file = dict(config.items('OPTIONS'))['users_file']
 print(users_file)
+generate_recommendations = dict(config.items('OPTIONS'))['recommendations']
+print(generate_recommendations)
 
 options = dict(config.items('OPTIONS'))
 calculate_all = options['calculate_all']
@@ -131,6 +138,23 @@ def getShared10s(userList):
         userList['zscore_x'] = (userList['score_x'] - average) / stdev
         userList = userList.sort_values(by='zscore_x', ascending=False)
         normalizedUserList = userList[userList['zscore_x'] > 0.9]
+        tens_list_lower = [row[0].lower() for row in rows]
+        unique_counts = {substr: (normalizedUserList["title_x"].str.lower().str.contains(substr)).any(axis=0).sum() for substr in tens_list_lower}
+        # return how many counts are greater than 0
+        for key in unique_counts:
+            if unique_counts[key] > 0:
+                shared_10s += 1
+        return shared_10s, len(tens_list_lower)
+
+        
+        # shared_10s = normalizedUserList[normalizedUserList['title_x'].str.lower().apply(lambda title: any(t in title for t in tens_list_lower))]
+        # # count how many times each substring was found        
+        # shared_10s = normalizedUserList[normalizedUserList['title_x'].str.lower().apply(contains_any)]
+        
+        print(unique_counts)
+        print(tens_list_lower)
+        # print(shared_10s.shape[0])
+        return len(unique_counts), len(tens_list_lower)
         for row in rows :
             total_10s += 1
             anime = row[0]
@@ -139,8 +163,6 @@ def getShared10s(userList):
                 if(anime.lower() in row['title_x'].lower()):
                     shared_10s += 1
                     break
-    
-    return shared_10s, total_10s
 
 def get_hoh_value(userList):
     y_average = userList['score_y'].mean()
@@ -260,26 +282,16 @@ every_n_users = int(options['every_n_users'])
 
 print("First turning all user CSV data into Anime Lists:")
 # Convert the CSV to a bunch of anime lists
-for user in unique_users:
-    user_count += 1
-    if(user in low_users_list):
-        continue
 
-    # set this in the config if you want to go through fast and skip users
-    if(every_n_users > 1 and user_count % every_n_users != 0):
-        continue
+# Filter out users in low_users_list
+filtered_users = user_data[~user_data['userid'].isin(low_users_list)]
 
-    # Create a DataFrame for the anime only from the specific user
-    filtered_df = user_data[user_data['userid'] == user]
+# If every_n_users > 1, filter users to process every nth user
+if every_n_users > 1:
+    filtered_users = filtered_users[filtered_users['userid'].apply(lambda x: unique_users.tolist().index(x) % every_n_users == 0)]
 
-    # Store the filtered DataFrame in the dictionary
-    AnimeListsFromFile[user] = filtered_df
-    
-    if(user_count % 100 == 0):
-        end = time.time()
-        avg = (end - start) / user_count
-        print("time left: ", avg * (len(unique_users) - user_count) / 60, " minutes")
-
+# Group by user and create a dictionary of DataFrames
+AnimeListsFromFile = {user: df for user, df in filtered_users.groupby('userid')}
 
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
 
@@ -290,7 +302,7 @@ for username in AnimeListsFromFile:
     user_count += 1
     user_list = AnimeListsFromFile[username]
     list_owner = username
-
+    # print("doing list", list_owner)
     # Get the average of the user BEFORE merging
     user_list_old_average = userList['score'].mean()
 
@@ -318,9 +330,10 @@ for username in AnimeListsFromFile:
     # Find the hoh value
     hoh_value = get_hoh_value(merged_data)
 
-    # TO DO: TEST TO MAKE SURE THIS WORKS
-    brett_value = get_brett_value(merged_data)
-    print(brett_value, username)
+    # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
+    # brett_value = get_brett_value(merged_data)
+    brett_value = 0
+
     
     # Find the users new mean after merging
     user_list_new_average = merged_data['score_y'].mean()
@@ -331,7 +344,7 @@ for username in AnimeListsFromFile:
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
     stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
-    if(user_count % 50 == 0):
+    if(user_count % 10 == 0):
         end = time.time()
         avg = (end - start) / user_count
         print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
@@ -358,6 +371,9 @@ import matplotlib.pyplot as plt
 
 # make a histogram with the final scores
 plt.hist(scores['final_score'], bins=50, range=[0,100])
+plt.xlabel('Final Score')
+plt.ylabel('Number of Users')
+plt.title('Final Score Distribution')
 plt.show()
 
 ## TO DO: other metrics?? favorites lists?? 
@@ -365,9 +381,18 @@ plt.show()
 # write the scores to a csv
 scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
 
+profile.disable()
+s = io.StringIO()
+ps = pstats.Stats(profile, stream=s).sort_stats('tottime')
+ps.print_stats()
+
+with open('profile.txt', 'w+') as f:
+    f.write(s.getvalue())
 
 ## GENERATE RECOMMENDATIONS
 # TO DO: normalize based on anilist score
+if(generate_recommendations == "False"):
+    sys.exit()
 
 # get the score of the user in the second row
 user_score = scores.iloc[2]['final_score']
