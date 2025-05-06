@@ -31,6 +31,13 @@ import cProfile
 import pstats
 import io
 import configparser
+import MySQLdb
+import time
+
+db_host = "localhost"
+db_user = "root"
+db_password = ""
+db_name = "anineighbors"
 
 profile = cProfile.Profile()
 profile.enable()
@@ -91,7 +98,8 @@ def makeUserDFFromResponse(response, userId):
             if(anime['scoreRaw'] == 0):
                 continue
             userList.loc[anime['mediaId']] = [userId, anime['media']['title']['romaji'], anime['mediaId'], anime['scoreRaw'], anime['status']]
-    global_user_anime_count = len(userList)
+    if global_user_anime_count == -1: # GLOBAL USER MUST BE THE FIRST ONE TO ENTER THIS FUNCTION; cannot call insert on it's own without fixing this
+        global_user_anime_count = len(userList)
     return userList
 
 def getUserListFromAPI(userId):
@@ -121,6 +129,9 @@ def getUserListFromAPI(userId):
         'listType': "ANIME"
     }
     response = requests.post(url, json={'query': queryUserList, 'variables': variables}).json()
+    if response == None or response['data'] == None or response['data']['User'] == None:
+        print("Error3: No response from API for userId", userId)
+        return None
     userList = makeUserDFFromResponse(response, userId)
     return userList        
 
@@ -130,39 +141,22 @@ userList = getUserListFromAPI(global_user_id)
 def getShared10s(userList):
     with open("shared 10s.csv", newline="", encoding='latin1') as csvfile:
         rows = csv.reader(csvfile, delimiter=",", dialect="excel")
+        tens_list_lower = [row[0].lower() for row in rows]
         shared_10s = 0
-        total_10s = 0
+        total_10s = len(tens_list_lower)
         userList.sort_values(by='score_x')
         average = userList['score_x'].mean()
         stdev = userList['score_x'].std()
         userList['zscore_x'] = (userList['score_x'] - average) / stdev
         userList = userList.sort_values(by='zscore_x', ascending=False)
         normalizedUserList = userList[userList['zscore_x'] > 0.9]
-        tens_list_lower = [row[0].lower() for row in rows]
+        
         unique_counts = {substr: (normalizedUserList["title_x"].str.lower().str.contains(substr)).any(axis=0).sum() for substr in tens_list_lower}
         # return how many counts are greater than 0
         for key in unique_counts:
             if unique_counts[key] > 0:
                 shared_10s += 1
-        return shared_10s, len(tens_list_lower)
-
-        
-        # shared_10s = normalizedUserList[normalizedUserList['title_x'].str.lower().apply(lambda title: any(t in title for t in tens_list_lower))]
-        # # count how many times each substring was found        
-        # shared_10s = normalizedUserList[normalizedUserList['title_x'].str.lower().apply(contains_any)]
-        
-        print(unique_counts)
-        print(tens_list_lower)
-        # print(shared_10s.shape[0])
-        return len(unique_counts), len(tens_list_lower)
-        for row in rows :
-            total_10s += 1
-            anime = row[0]
-            # Search for an entry of anime in any entry of title_x
-            for index, row in normalizedUserList.iterrows():
-                if(anime.lower() in row['title_x'].lower()):
-                    shared_10s += 1
-                    break
+        return shared_10s, total_10s
 
 def get_hoh_value(userList):
     y_average = userList['score_y'].mean()
@@ -201,16 +195,17 @@ def get_anime_count_score(stats_df, scores_df):
 
     # With 200 anime
     # should be aiming for 60-120 which is 0.3 - 0.6
-
+    print("global user anime count", global_user_anime_count)
+    print("stats df", stats_df['anime_count'])
     # Calculate count_percentage based on the anime_count column
     stats_df['count_percentage'] = stats_df['anime_count'] / global_user_anime_count
-
+    print(stats_df['count_percentage'])
     # # Map the input value to the desired range using a non-linear function based on
     # 0.15 - 1
     # 0.3 - 5
     # 0.6 - 10
     scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(36.6666 * x +  -22.22222 * pow(x, 2) - 4, 10) * float(weights['shared_count_weight']))
-    
+    print(scores_df['anime_count_score'])
     # # Drop the intermediate 'count_percentage' column
     scores_df = stats_df.drop('count_percentage', axis=1)
 
@@ -254,7 +249,67 @@ def calculate_scores(stats_df):
     get_pearson_score(stats_df, scores_df)
     scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
     scores_df = scores_df.sort_values(by='final_score', ascending=False)
+    for index, row in scores_df.iterrows():
+        # Insert the neighbor into the database
+        insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
     return scores_df
+
+def create_database_structure():
+    connection = None
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password
+        )
+        cursor = connection.cursor()
+        cursor.execute("CREATE DATABASE IF NOT EXISTS anineighbors;")
+        print("Database created successfully!")
+    except MySQLdb.Error as e:
+        print(f"Error: {e}")
+    finally:
+        if connection:
+            connection.close()
+    
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        
+        # Create the user_neighbors table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_neighbors (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                reference_username VARCHAR(50) NOT NULL,
+                neighbor_username VARCHAR(50) NOT NULL,
+                similarity_score FLOAT NOT NULL,
+                anime_count INT,
+                shared_10s_ratio FLOAT,
+                hoh_value FLOAT,
+                pearson_coefficient FLOAT,
+                mean_score_diff FLOAT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                
+                # Create a unique constraint to prevent duplicate neighbor relationships
+                UNIQUE KEY unique_neighbor (reference_username, neighbor_username)
+            );
+        """)
+        
+        connection.commit()
+        print("User neighbors table created successfully!")
+        
+    except MySQLdb.Error as e:
+        print(f"Error creating neighbors table: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+
+create_database_structure()
 
 # Read in all the user data
 user_data = pd.read_csv("DataSets/{file}".format(file=users_file))
@@ -294,6 +349,69 @@ if every_n_users > 1:
 AnimeListsFromFile = {user: df for user, df in filtered_users.groupby('userid')}
 
 stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
+
+def insert_neighbor_into_db(neighbor_username, similarity_score, anime_count, shared_10s_ratio, hoh_value, pearson_coefficient, mean_score_diff):
+    connection = None
+    normalized_similarity_score = similarity_score / max_score * 100
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        print(f"inserting user {neighbor_username} with score {normalized_similarity_score}")
+        # Insert the neighbor into the database
+        cursor.execute("""
+            INSERT INTO anineighbors.user_neighbors (reference_username, neighbor_username, similarity_score, anime_count, shared_10s_ratio, hoh_value, pearson_coefficient, mean_score_diff)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                similarity_score = VALUES(similarity_score),
+                anime_count = VALUES(anime_count),
+                shared_10s_ratio = VALUES(shared_10s_ratio),
+                hoh_value = VALUES(hoh_value),
+                pearson_coefficient = VALUES(pearson_coefficient),
+                mean_score_diff = VALUES(mean_score_diff),
+                last_updated = CURRENT_TIMESTAMP
+        """, (global_username, neighbor_username, normalized_similarity_score, anime_count, shared_10s_ratio, hoh_value, pearson_coefficient, mean_score_diff))
+        
+        connection.commit()
+    except MySQLdb.Error as e:
+        print(f"Error inserting into database: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+
+def show_neighbors_in_db():
+    connection = None
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        
+        # Select all neighbors for the given user
+        cursor.execute("""
+            SELECT * FROM anineighbors.user_neighbors
+            WHERE reference_username = %s
+            ORDER BY similarity_score DESC
+            LIMIT 100;
+        """, (global_username,))
+        
+        results = cursor.fetchall()
+        for row in results:
+            print(row)
+    except MySQLdb.Error as e:
+        print(f"Error fetching from database: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
 
 print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
 start = time.time()
@@ -349,7 +467,6 @@ for username in AnimeListsFromFile:
         avg = (end - start) / user_count
         print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
 
-
 print(stats)
 scores = calculate_scores(stats)
 print(scores)
@@ -370,12 +487,13 @@ else:
 import matplotlib.pyplot as plt
 
 # make a histogram with the final scores
-plt.hist(scores['final_score'], bins=50, range=[0,100])
-plt.xlabel('Final Score')
-plt.ylabel('Number of Users')
-plt.title('Final Score Distribution')
-plt.show()
+# plt.hist(scores['final_score'], bins=50, range=[0,100])
+# plt.xlabel('Final Score')
+# plt.ylabel('Number of Users')
+# plt.title('Final Score Distribution')
+# plt.show()
 
+show_neighbors_in_db()
 ## TO DO: other metrics?? favorites lists?? 
 
 # write the scores to a csv
@@ -389,8 +507,147 @@ ps.print_stats()
 with open('profile.txt', 'w+') as f:
     f.write(s.getvalue())
 
+def insert_user_into_db(username):
+    # get user data
+    url = 'https://graphql.anilist.co'
+    # Make query to get user Id
+    queryUserId = '''
+    query($name:String){User(name:$name){id}}
+    '''
+    variablesUserId = {
+        'name': username.strip()
+    }
+    response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
+    response_json = response_raw.json()
+    print("response", response_json)
+    if response_json is None or response_json['data'] is None or response_json['data']['User'] is None:
+        if response_json and response_json['errors'][0]['message'] == "Too Many Requests.":
+            while(True):
+                print("Too many requests, sleeping")
+                time.sleep(30)
+                response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
+                response_json = response_raw.json()
+                if response_json is not None and response_json['data'] is not None and response_json['data']['User'] is not None:
+                    break
+                elif response_json and response_json['errors'][0]['message'] != "Too Many Requests.":
+                    print("Error: No response from API for userId", username)
+                    return None
+
+        else:
+            print("Error: No response from API for userId", username)
+            return None
+    userid = response_json['data']['User']['id']
+    print("user id for user ", username, "is", userid)
+    time.sleep(2.5)
+    list = getUserListFromAPI(userid)
+    if list is None:
+        print("Error2: No response from API for user", username)
+        return None
+    print(list)
+    # get stats
+    user_list = list
+    list_owner = username
+    # print("doing list", list_owner)
+    # Get the average of the user BEFORE merging
+    user_list_old_average = userList['score'].mean()
+
+    # Attach scores from userList that match the mediaId of the filtered_responses
+    merged_data = pd.merge(user_list, userList, on='media_id', how='left')
+
+    # Remove NaNs
+    merged_data = merged_data.dropna()
+
+    # Remove Duplicates
+    merged_data = merged_data.drop_duplicates(subset='media_id', keep='first')
+
+    # Sort by title_x
+    merged_data = merged_data.sort_values(by='score_y')
+
+    # Find the average of all scores that are above 0
+    meanscore = merged_data['score_x'].mean()
+
+    # Find the number of anime the user has watched
+    anime_count = len(merged_data)
+
+    # Find the amount of shared 10s
+    shared_10s, total_10s = getShared10s(merged_data)
+
+    # Find the hoh value
+    hoh_value = get_hoh_value(merged_data)
+
+    # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
+    # brett_value = get_brett_value(merged_data)
+    brett_value = 0
+
+    
+    # Find the users new mean after merging
+    user_list_new_average = merged_data['score_y'].mean()
+    mean_diff = user_list_old_average - user_list_new_average
+    user_mean_diff = user_list_new_average - meanscore
+
+    # Find the pearson coefficient
+    ratings_df = merged_data[['score_x', 'score_y']]
+    pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
+    stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
+    stats_df.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
+    if(user_count % 10 == 0):
+        end = time.time()
+        avg = (end - start) / user_count
+        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
+    # insert into db
+    scores_df = pd.DataFrame()
+    scores_df['name'] = stats_df['name']
+    get_anime_count_score(stats_df, scores_df)
+    get_shared_10s_score(stats_df, scores_df)
+    get_mean_score_scores(stats_df, scores_df)
+    get_hoh_score(stats_df, scores_df)
+    get_pearson_score(stats_df, scores_df)
+    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
+    scores_df = scores_df.sort_values(by='final_score', ascending=False)
+    for index, row in scores_df.iterrows():
+        # Insert the neighbor into the database
+        insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
+
+insert_user_into_db("zoht")
+
+def update_top_100():
+    connection = None
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        
+        # Select all neighbors for the given user
+        cursor.execute("""
+            SELECT * FROM anineighbors.user_neighbors
+            WHERE reference_username = %s
+            ORDER BY similarity_score DESC
+            LIMIT 200;
+        """, (global_username,))
+        
+        results = cursor.fetchall()
+        for row in results:
+            username = row[2]
+            print("updating user", username)
+            insert_user_into_db(username)
+    except MySQLdb.Error as e:
+        print(f"Error fetching from database: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
 ## GENERATE RECOMMENDATIONS
 # TO DO: normalize based on anilist score
+
+# update_top_100()
+
+
+
+
 if(generate_recommendations == "False"):
     sys.exit()
 
@@ -533,4 +790,6 @@ user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index
 
 
 # By implementing these suggestions, you can make the code more efficient and reduce its computational overhead.
+
+
 
