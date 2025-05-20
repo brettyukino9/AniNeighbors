@@ -33,6 +33,7 @@ import io
 import configparser
 import MySQLdb
 import time
+import numpy as np
 
 db_host = "localhost"
 db_user = "root"
@@ -186,7 +187,37 @@ def get_brett_value(userList):
                 agrees+=1
             else:
                 disagrees+=1
+    print("agrees", agrees)
+    print("disagrees", disagrees)
     return agrees / (agrees + disagrees)
+
+def get_brett_value_new(userList):
+    user_diff_df = userList['score_x'].values[:, None] - userList['score_x'].values
+    user_diff_df = pd.DataFrame(user_diff_df, index=userList.index, columns=userList.index)
+    binary_user_df = (user_diff_df >= 0).astype(int)
+    
+    neighbor_diff_df = userList['score_y'].values[:, None] - userList['score_y'].values
+    neighbor_diff_df = pd.DataFrame(neighbor_diff_df, index=userList.index, columns=userList.index)
+    binary_neighbor_df = (neighbor_diff_df >= 0).astype(int)
+
+    combined_xor_df = binary_user_df ^ binary_neighbor_df # if both positive 0 or if both negative 0 (agree), if one positive and one negative 1 (disagree)
+    total_ones = np.sum(combined_xor_df.values == 1)
+    total_zeros = np.sum(combined_xor_df.values == 0)
+    
+    # Because both 0 and positive are 1, it counts it as an agree when one is 0 and the other is positive. 
+    # To fix this, find the amount of 0s and positive and subtract these from the totals at the end.
+    binary_user_df_zero = (user_diff_df == 0).astype(int) # 1 if zero
+    binary_user_df_positive = (user_diff_df > 0).astype(int) # 1 if positive
+    binary_neighbor_df_zero = (neighbor_diff_df == 0).astype(int) # 1 if zero
+    binary_neighbor_df_positive = (neighbor_diff_df > 0).astype(int) # 1 if positive
+    zero_df_1 = binary_user_df_zero & binary_neighbor_df_positive # 1 is all the bugged ones
+    zero_df_2 = binary_user_df_positive & binary_neighbor_df_zero # 1 is all the bugged ones
+    bugs = (np.sum(zero_df_1.values == 1) + np.sum(zero_df_2.values == 1)) / 2
+
+    agrees = (total_zeros - len(userList)) / 2 - bugs
+    disagrees = (total_ones) / 2 + bugs 
+    percentage = agrees / (agrees + disagrees)
+    return percentage
     
 
 def get_anime_count_score(stats_df, scores_df):
@@ -416,7 +447,7 @@ def show_neighbors_in_db():
 print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
 start = time.time()
 user_count = 0
-for username in AnimeListsFromFile:
+for username in AnimeListsFromFile: # TODO: fix this code so it doesn't duplicate with add_user_to_db; once you have a list you should be able to add it to db seamlessly
     user_count += 1
     user_list = AnimeListsFromFile[username]
     list_owner = username
@@ -449,8 +480,15 @@ for username in AnimeListsFromFile:
     hoh_value = get_hoh_value(merged_data)
 
     # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
-    # brett_value = get_brett_value(merged_data)
-    brett_value = 0
+    start = time.time()
+    brett_value = get_brett_value(merged_data)
+    end = time.time()
+    print("got brett value {} in {} seconds".format(brett_value, end - start))
+    start = time.time()
+    brett_value = get_brett_value_new(merged_data)
+    end = time.time()
+    print("got brett value2 {} in {} seconds".format(brett_value, end - start))
+
 
     
     # Find the users new mean after merging
@@ -608,7 +646,7 @@ def insert_user_into_db(username):
         # Insert the neighbor into the database
         insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
 
-insert_user_into_db("zoht")
+# insert_user_into_db("problem02")
 
 def update_top_100():
     connection = None
