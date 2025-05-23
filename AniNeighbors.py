@@ -269,6 +269,12 @@ def get_pearson_score(stats_df, scores_df):
     # -1 = -10
     scores_df['pearson_score'] = stats_df['pearson'].apply(lambda x: 10 * x * float(weights['pearson_weight']))
 
+def insert_scores_into_db(scores_df):
+    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
+    scores_df = scores_df.sort_values(by='final_score', ascending=False)
+    for index, row in scores_df.iterrows():
+        # Insert the neighbor into the database
+        insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
 
 def calculate_scores(stats_df):
     scores_df = pd.DataFrame()
@@ -278,11 +284,7 @@ def calculate_scores(stats_df):
     get_mean_score_scores(stats_df, scores_df)
     get_hoh_score(stats_df, scores_df)
     get_pearson_score(stats_df, scores_df)
-    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
-    scores_df = scores_df.sort_values(by='final_score', ascending=False)
-    for index, row in scores_df.iterrows():
-        # Insert the neighbor into the database
-        insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
+    insert_scores_into_db(scores_df)
     return scores_df
 
 def create_database_structure():
@@ -444,19 +446,14 @@ def show_neighbors_in_db():
             cursor.close()
             connection.close()
 
-print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
-start = time.time()
-user_count = 0
-for username in AnimeListsFromFile: # TODO: fix this code so it doesn't duplicate with add_user_to_db; once you have a list you should be able to add it to db seamlessly
-    user_count += 1
-    user_list = AnimeListsFromFile[username]
+def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_name):
     list_owner = username
     # print("doing list", list_owner)
     # Get the average of the user BEFORE merging
-    user_list_old_average = userList['score'].mean()
-
+    user_list_old_average = user_list['score'].mean()
+    
     # Attach scores from userList that match the mediaId of the filtered_responses
-    merged_data = pd.merge(user_list, userList, on='media_id', how='left')
+    merged_data = pd.merge(neighbor_list, user_list, on='media_id', how='left')
 
     # Remove NaNs
     merged_data = merged_data.dropna()
@@ -499,11 +496,19 @@ for username in AnimeListsFromFile: # TODO: fix this code so it doesn't duplicat
     # Find the pearson coefficient
     ratings_df = merged_data[['score_x', 'score_y']]
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
-    stats.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
+    stats_df.loc[neighbor_name] = [neighbor_name, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
+
+
+print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
+start = time.time()
+user_count = 0
+for username in AnimeListsFromFile: # TODO: fix this code so it doesn't duplicate with add_user_to_db; once you have a list you should be able to add it to db seamlessly
+    user_count += 1
+    get_neighbor_stats_from_list(stats, AnimeListsFromFile[username], userList, username)
     if(user_count % 10 == 0):
         end = time.time()
         avg = (end - start) / user_count
-        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
+        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")  
 
 print(stats)
 scores = calculate_scores(stats)
@@ -577,76 +582,24 @@ def insert_user_into_db(username):
     userid = response_json['data']['User']['id']
     print("user id for user ", username, "is", userid)
     time.sleep(2.5)
+
+    # get list of user
     list = getUserListFromAPI(userid)
     if list is None:
         print("Error2: No response from API for user", username)
         return None
     print(list)
-    # get stats
-    user_list = list
-    list_owner = username
-    # print("doing list", list_owner)
-    # Get the average of the user BEFORE merging
-    user_list_old_average = userList['score'].mean()
 
-    # Attach scores from userList that match the mediaId of the filtered_responses
-    merged_data = pd.merge(user_list, userList, on='media_id', how='left')
-
-    # Remove NaNs
-    merged_data = merged_data.dropna()
-
-    # Remove Duplicates
-    merged_data = merged_data.drop_duplicates(subset='media_id', keep='first')
-
-    # Sort by title_x
-    merged_data = merged_data.sort_values(by='score_y')
-
-    # Find the average of all scores that are above 0
-    meanscore = merged_data['score_x'].mean()
-
-    # Find the number of anime the user has watched
-    anime_count = len(merged_data)
-
-    # Find the amount of shared 10s
-    shared_10s, total_10s = getShared10s(merged_data)
-
-    # Find the hoh value
-    hoh_value = get_hoh_value(merged_data)
-
-    # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
-    # brett_value = get_brett_value(merged_data)
-    brett_value = 0
-
-    
-    # Find the users new mean after merging
-    user_list_new_average = merged_data['score_y'].mean()
-    mean_diff = user_list_old_average - user_list_new_average
-    user_mean_diff = user_list_new_average - meanscore
-
-    # Find the pearson coefficient
-    ratings_df = merged_data[['score_x', 'score_y']]
-    pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
+    # get user stats and add them
     stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
-    stats_df.loc[list_owner] = [list_owner, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
+    get_neighbor_stats_from_list(stats_df, list, userList, username)
     if(user_count % 10 == 0):
         end = time.time()
         avg = (end - start) / user_count
         print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
-    # insert into db
-    scores_df = pd.DataFrame()
-    scores_df['name'] = stats_df['name']
-    get_anime_count_score(stats_df, scores_df)
-    get_shared_10s_score(stats_df, scores_df)
-    get_mean_score_scores(stats_df, scores_df)
-    get_hoh_score(stats_df, scores_df)
-    get_pearson_score(stats_df, scores_df)
-    scores_df['final_score'] = scores_df['anime_count_score'] + scores_df['shared_10s_score'] + scores_df['global_user_mean_diff_score'] + scores_df['user_mean_diff_score'] + scores_df['hoh_score'] + scores_df['pearson_score']
-    scores_df = scores_df.sort_values(by='final_score', ascending=False)
-    for index, row in scores_df.iterrows():
-        # Insert the neighbor into the database
-        insert_neighbor_into_db(row['name'], row['final_score'], row['anime_count_score'], row['shared_10s_score'], row['hoh_score'], row['pearson_score'], row['global_user_mean_diff_score'])
+    calculate_scores(stats_df)
 
-# insert_user_into_db("problem02")
+insert_user_into_db("problem02")
 
 def update_top_100():
     connection = None
