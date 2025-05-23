@@ -35,56 +35,249 @@ import MySQLdb
 import time
 import numpy as np
 
-db_host = "localhost"
-db_user = "root"
-db_password = ""
-db_name = "anineighbors"
+def init():
+    global db_host
+    db_host = "localhost"
+    global db_user
+    db_user = "root"
+    global db_password
+    db_password = ""
+    global db_name
+    db_name = "anineighbors"
 
-profile = cProfile.Profile()
-profile.enable()
+    config = configparser.RawConfigParser()
+    config.read('config.cfg')
+    global weights
+    weights = dict(config.items('WEIGHTS'))
+    print(weights)
+    global max_score
+    max_score = (float(weights['pearson_weight']) + float(weights['shared_count_weight']) + float(weights['shared_10s_weight']) + float(weights['hoh_weight'])) * 10
+    print(max_score)
+    global global_username
+    global_username = dict(config.items('USERNAME'))['username']
+    print(global_username)
+    global users_file
+    users_file = dict(config.items('OPTIONS'))['users_file']
+    print(users_file)
+    global generate_recommendations
+    generate_recommendations = dict(config.items('OPTIONS'))['recommendations']
+    print(generate_recommendations)
+    global options
+    options = dict(config.items('OPTIONS'))
+    global calculate_all
+    calculate_all = options['calculate_all']
 
-config = configparser.RawConfigParser()
-config.read('config.cfg')
+    global url
+    url = 'https://graphql.anilist.co'
 
-weights = dict(config.items('WEIGHTS'))
-print(weights)
-max_score = (float(weights['pearson_weight']) + float(weights['shared_count_weight']) + float(weights['shared_10s_weight']) + float(weights['hoh_weight'])) * 10
-print(max_score)
-global_username = dict(config.items('USERNAME'))['username']
-print(global_username)
-users_file = dict(config.items('OPTIONS'))['users_file']
-print(users_file)
-generate_recommendations = dict(config.items('OPTIONS'))['recommendations']
-print(generate_recommendations)
+    global global_user_anime_count
+    global_user_anime_count = -1
 
-options = dict(config.items('OPTIONS'))
-calculate_all = options['calculate_all']
+def get_global_user_list():
+    queryUserId = '''
+    query($name:String){User(name:$name){id}}
+    '''
 
-## TO DO ADD SHARED 10s to config
+    # Define our query variables and values that will be used in the query request
+    variablesUserId = {
+        'name': global_username
+    }
 
-# Make query to get user Id
-queryUserId = '''
-query($name:String){User(name:$name){id}}
-'''
+    # Make the HTTP Api request to get the user id of the username
+    response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
+    global_user_id = response['data']['User']['id']
 
-# Define our query variables and values that will be used in the query request
-variablesUserId = {
-    'name': global_username
-}
+    userList = getUserListFromAPI(global_user_id)
+    return userList
 
-url = 'https://graphql.anilist.co'
+def calculate_user_stats_from_file(userList):
+ # Read in all the user data
+    user_data = pd.read_csv("DataSets/{file}".format(file=users_file))
+    user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
+    print("user data", user_data)
 
-# Make the HTTP Api request to get the user id of the username
-response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
-global_user_id = response['data']['User']['id']
+    unique_users = user_data['userid'].unique()
+    print(unique_users)
 
-# Define our query variables and values that will be used in the query request
-variables = {
-    'userId': global_user_id
-}
+    # skip users already calculating to not be high; TAKE THIS OUT?
+    low_users_path = f"Results/{global_username}_low_users.csv"
+    from os.path import exists
+    file_exists = exists(low_users_path)
+    low_users_list = []
+    if(file_exists and calculate_all == "False"):
+        low_users = pd.read_csv(f"Results/{global_username}_low_users.csv")
+        low_users_list = low_users['name'].tolist()
 
-AnimeLists = {}
-global_user_anime_count = -1
+    AnimeListsFromFile = {}
+
+    import time
+    start = time.time()
+    user_count = 0
+    every_n_users = int(options['every_n_users'])
+
+    print("First turning all user CSV data into Anime Lists:")
+    # Convert the CSV to a bunch of anime lists
+    # Filter out users in low_users_list
+    filtered_users = user_data[~user_data['userid'].isin(low_users_list)]
+
+    # If every_n_users > 1, filter users to process every nth user
+    if every_n_users > 1:
+        filtered_users = filtered_users[filtered_users['userid'].apply(lambda x: unique_users.tolist().index(x) % every_n_users == 0)]
+
+    # Group by user and create a dictionary of DataFrames
+    AnimeListsFromFile = {user: df for user, df in filtered_users.groupby('userid')}
+
+    stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
+    print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
+    start = time.time()
+    user_count = 0
+    for username in AnimeListsFromFile: 
+        user_count += 1
+        get_neighbor_stats_from_list(stats, AnimeListsFromFile[username], userList, username)
+        if(user_count % 10 == 0):
+            end = time.time()
+            avg = (end - start) / user_count
+            print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")  
+
+    print(stats)
+    scores = calculate_scores(stats)
+    print(scores)
+
+    # normalize final score based on max score
+    scores['final_score'] = scores['final_score'] / max_score * 100
+    print(scores)
+
+    # save a list of low scoring users so you can save time ignoring them next time its run
+    low_users = scores[scores['final_score'] < 20]
+    print(low_users)
+
+    if(file_exists) :
+        low_users.to_csv(f'Results/{global_username}_low_users.csv', mode='a', index=False, header=False)
+    else:
+        low_users.to_csv(f'Results/{global_username}_low_users.csv', index=False)
+
+    import matplotlib.pyplot as plt
+
+    # make a histogram with the final scores
+    # plt.hist(scores['final_score'], bins=50, range=[0,100])
+    # plt.xlabel('Final Score')
+    # plt.ylabel('Number of Users')
+    # plt.title('Final Score Distribution')
+    # plt.show()
+
+    ## TO DO: other metrics?? favorites lists?? 
+
+    # write the scores to a csv
+    scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
+
+def generate_recommendations(): # BROKEN; TO BE FIXED; update this to get users from the DB. Might be something along with top 100 because that requires getting all user lists.
+    # get the score of the user in the second row
+    user_score = scores.iloc[2]['final_score']
+
+    high_users = scores[scores['final_score'] > user_score * 0.7]
+    top_users = high_users['name'].tolist()
+    anime_list = []
+    for username in top_users:
+        user_list = AnimeListsFromFile[username]
+        list_owner = username
+        anime_list = anime_list + user_list['title'].tolist()
+
+    # drop duplicates in anime_list
+    anime_list = list(set(anime_list))
+    print(f"{len(anime_list)} unique anime")
+
+    # make a users x anime matrix using each username and each unique anime
+    user_anime_matrix = pd.DataFrame(columns=anime_list)
+    for username in top_users:
+        list = AnimeListsFromFile[username]
+        user_anime_matrix.loc[username] = [0] * len(anime_list)
+        for index, row in list.iterrows():
+            anime = row['title']
+            user_anime_matrix.loc[username][anime] = row['score']
+
+    # transpose the user anime matrix
+    user_anime_matrix = user_anime_matrix.T
+
+    # turn all the 0s into NaN
+    user_anime_matrix = user_anime_matrix.replace(0, float('nan'))
+
+    # get the z scores for each users anime
+    user_anime_matrix_normalized = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
+    print(user_anime_matrix_normalized)
+
+    # calculate stats
+    user_anime_matrix['average score'] = user_anime_matrix.mean(axis=1)
+    user_anime_matrix['mean z-score'] = user_anime_matrix_normalized.mean(axis=1)
+    user_anime_matrix['number of ratings'] = user_anime_matrix_normalized.count(axis=1)
+
+    # remove lesser seen anime
+    min_threshold = len(top_users) * 0.3 * 0.5
+    user_anime_matrix = user_anime_matrix[user_anime_matrix['number of ratings'] > min_threshold]
+
+    # remove anime on the users list
+    user_anime_matrix = user_anime_matrix[~user_anime_matrix.index.isin(userList['title'])]
+
+    # move the stats columns to the front
+    rating_num = user_anime_matrix.pop('number of ratings')
+    user_anime_matrix.insert(0, 'number of ratings', rating_num)
+    mean_zscore = user_anime_matrix.pop('mean z-score')
+    user_anime_matrix.insert(0, 'mean z-score', mean_zscore)
+
+    # sort by mean z-score
+    user_anime_matrix = user_anime_matrix.sort_values(by='mean z-score', ascending=False)
+
+    animeAverageScoreQuery = '''
+    query GetAnimeAverageScore($animeName: String!) {
+    Media(search: $animeName, type: ANIME) {
+        title {
+        romaji
+        }
+        averageScore
+    }
+    }
+    '''
+
+    import numpy as np
+    user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 1.0]
+    user_anime_matrix['anilist score'] = np.nan
+    aniist_scores = user_anime_matrix.pop('anilist score')
+    user_anime_matrix.insert(1, 'anilist score', aniist_scores)
+
+    # iterate through each row in the user anime matrix
+    for index, row in user_anime_matrix.iterrows():
+        # get the anime name
+        animeName = index
+        # Define our query variables and values that will be used in the query request
+        variables = {
+            'animeName': animeName
+        }
+        # Make the HTTP Api request to get the average score of the anime
+        response = requests.post(url, json={'query': animeAverageScoreQuery, 'variables': variables}).json()
+        averageScore = response['data']['Media']['averageScore']
+        time.sleep(1)
+        # If the average score is null, skip the anime
+        if averageScore is not None:
+            # Assign the average score to the 'anilist score' column directly
+            user_anime_matrix.at[index, 'anilist score'] = averageScore
+
+    print(user_anime_matrix)
+
+
+    # get the average score for the entire matrix
+    user_anime_matrix['average score diff'] = user_anime_matrix['average score'] - user_anime_matrix['anilist score']
+
+    user_anime_matrix['Recommendation Score'] = 2 * user_anime_matrix['mean z-score'] + user_anime_matrix['average score diff'] * 0.2
+
+    # normalized based on the max recommendation score
+    user_anime_matrix['Recommendation Score'] = user_anime_matrix['Recommendation Score'] / user_anime_matrix['Recommendation Score'].max() * 100
+
+    # sort by recommendation score
+    user_anime_matrix = user_anime_matrix.sort_values(by='Recommendation Score', ascending=False)
+
+    rec_score = user_anime_matrix.pop('Recommendation Score')
+    user_anime_matrix.insert(0, 'Recommendation Score', rec_score)
+
+    user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
 
 def makeUserDFFromResponse(response, userId):
     global global_user_anime_count
@@ -135,9 +328,6 @@ def getUserListFromAPI(userId):
         return None
     userList = makeUserDFFromResponse(response, userId)
     return userList        
-
-userList = getUserListFromAPI(global_user_id)
-
 
 def getShared10s(userList):
     with open("shared 10s.csv", newline="", encoding='latin1') as csvfile:
@@ -342,47 +532,6 @@ def create_database_structure():
             cursor.close()
             connection.close()
 
-create_database_structure()
-
-# Read in all the user data
-user_data = pd.read_csv("DataSets/{file}".format(file=users_file))
-user_data.columns = ['userid', 'title', 'media_id', 'score', 'status']
-print("user data", user_data)
-
-unique_users = user_data['userid'].unique()
-print(unique_users)
-
-# skip users already calculating to not be high
-low_users_path = f"Results/{global_username}_low_users.csv"
-from os.path import exists
-file_exists = exists(low_users_path)
-low_users_list = []
-if(file_exists and calculate_all == "False"):
-    low_users = pd.read_csv(f"Results/{global_username}_low_users.csv")
-    low_users_list = low_users['name'].tolist()
-
-AnimeListsFromFile = {}
-
-import time
-start = time.time()
-user_count = 0
-every_n_users = int(options['every_n_users'])
-
-print("First turning all user CSV data into Anime Lists:")
-# Convert the CSV to a bunch of anime lists
-
-# Filter out users in low_users_list
-filtered_users = user_data[~user_data['userid'].isin(low_users_list)]
-
-# If every_n_users > 1, filter users to process every nth user
-if every_n_users > 1:
-    filtered_users = filtered_users[filtered_users['userid'].apply(lambda x: unique_users.tolist().index(x) % every_n_users == 0)]
-
-# Group by user and create a dictionary of DataFrames
-AnimeListsFromFile = {user: df for user, df in filtered_users.groupby('userid')}
-
-stats = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
-
 def insert_neighbor_into_db(neighbor_username, similarity_score, anime_count, shared_10s_ratio, hoh_value, pearson_coefficient, mean_score_diff):
     connection = None
     normalized_similarity_score = similarity_score / max_score * 100
@@ -447,7 +596,6 @@ def show_neighbors_in_db():
             connection.close()
 
 def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_name):
-    list_owner = username
     # print("doing list", list_owner)
     # Get the average of the user BEFORE merging
     user_list_old_average = user_list['score'].mean()
@@ -478,13 +626,13 @@ def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_na
 
     # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
     start = time.time()
-    brett_value = get_brett_value(merged_data)
-    end = time.time()
-    print("got brett value {} in {} seconds".format(brett_value, end - start))
+    # brett_value = get_brett_value(merged_data)
+    # end = time.time()
+    # print("got brett value {} in {} seconds".format(brett_value, end - start))
     start = time.time()
     brett_value = get_brett_value_new(merged_data)
     end = time.time()
-    print("got brett value2 {} in {} seconds".format(brett_value, end - start))
+    # print("got brett value2 {} in {} seconds".format(brett_value, end - start))
 
 
     
@@ -498,62 +646,9 @@ def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_na
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
     stats_df.loc[neighbor_name] = [neighbor_name, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
 
-
-print(f"Calculating the stats for {len(AnimeListsFromFile)} users")
-start = time.time()
-user_count = 0
-for username in AnimeListsFromFile: # TODO: fix this code so it doesn't duplicate with add_user_to_db; once you have a list you should be able to add it to db seamlessly
-    user_count += 1
-    get_neighbor_stats_from_list(stats, AnimeListsFromFile[username], userList, username)
-    if(user_count % 10 == 0):
-        end = time.time()
-        avg = (end - start) / user_count
-        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")  
-
-print(stats)
-scores = calculate_scores(stats)
-print(scores)
-
-# normalize final score based on max score
-scores['final_score'] = scores['final_score'] / max_score * 100
-print(scores)
-
-# save a list of low scoring users so you can save time ignoring them next time its run
-low_users = scores[scores['final_score'] < 20]
-print(low_users)
-
-if(file_exists) :
-    low_users.to_csv(f'Results/{global_username}_low_users.csv', mode='a', index=False, header=False)
-else:
-    low_users.to_csv(f'Results/{global_username}_low_users.csv', index=False)
-
-import matplotlib.pyplot as plt
-
-# make a histogram with the final scores
-# plt.hist(scores['final_score'], bins=50, range=[0,100])
-# plt.xlabel('Final Score')
-# plt.ylabel('Number of Users')
-# plt.title('Final Score Distribution')
-# plt.show()
-
-show_neighbors_in_db()
-## TO DO: other metrics?? favorites lists?? 
-
-# write the scores to a csv
-scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
-
-profile.disable()
-s = io.StringIO()
-ps = pstats.Stats(profile, stream=s).sort_stats('tottime')
-ps.print_stats()
-
-with open('profile.txt', 'w+') as f:
-    f.write(s.getvalue())
-
-def insert_user_into_db(username):
-    # get user data
-    url = 'https://graphql.anilist.co'
+def get_user_api_stats_and_insert(username, userList):
     # Make query to get user Id
+    url = 'https://graphql.anilist.co'
     queryUserId = '''
     query($name:String){User(name:$name){id}}
     '''
@@ -577,7 +672,7 @@ def insert_user_into_db(username):
                     return None
 
         else:
-            print("Error: No response from API for userId", username)
+            print("Error4: No response from API for userId", username)
             return None
     userid = response_json['data']['User']['id']
     print("user id for user ", username, "is", userid)
@@ -593,15 +688,15 @@ def insert_user_into_db(username):
     # get user stats and add them
     stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
     get_neighbor_stats_from_list(stats_df, list, userList, username)
-    if(user_count % 10 == 0):
-        end = time.time()
-        avg = (end - start) / user_count
-        print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
+    # if(user_count % 10 == 0):
+    #     end = time.time()
+    #     avg = (end - start) / user_count
+    #     print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
     calculate_scores(stats_df)
 
-insert_user_into_db("problem02")
 
-def update_top_100():
+
+def update_top_100(userList):
     connection = None
     try:
         connection = MySQLdb.connect(
@@ -624,132 +719,13 @@ def update_top_100():
         for row in results:
             username = row[2]
             print("updating user", username)
-            insert_user_into_db(username)
+            get_user_api_stats_and_insert(username, userList)
     except MySQLdb.Error as e:
         print(f"Error fetching from database: {e}")
     finally:
         if connection:
             cursor.close()
             connection.close()
-## GENERATE RECOMMENDATIONS
-# TO DO: normalize based on anilist score
-
-# update_top_100()
-
-
-
-
-if(generate_recommendations == "False"):
-    sys.exit()
-
-# get the score of the user in the second row
-user_score = scores.iloc[2]['final_score']
-
-high_users = scores[scores['final_score'] > user_score * 0.7]
-top_users = high_users['name'].tolist()
-anime_list = []
-for username in top_users:
-    user_list = AnimeListsFromFile[username]
-    list_owner = username
-    anime_list = anime_list + user_list['title'].tolist()
-
-# drop duplicates in anime_list
-anime_list = list(set(anime_list))
-print(f"{len(anime_list)} unique anime")
-
-# make a users x anime matrix using each username and each unique anime
-user_anime_matrix = pd.DataFrame(columns=anime_list)
-for username in top_users:
-    list = AnimeListsFromFile[username]
-    user_anime_matrix.loc[username] = [0] * len(anime_list)
-    for index, row in list.iterrows():
-        anime = row['title']
-        user_anime_matrix.loc[username][anime] = row['score']
-
-# transpose the user anime matrix
-user_anime_matrix = user_anime_matrix.T
-
-# turn all the 0s into NaN
-user_anime_matrix = user_anime_matrix.replace(0, float('nan'))
-
-# get the z scores for each users anime
-user_anime_matrix_normalized = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
-print(user_anime_matrix_normalized)
-
-# calculate stats
-user_anime_matrix['average score'] = user_anime_matrix.mean(axis=1)
-user_anime_matrix['mean z-score'] = user_anime_matrix_normalized.mean(axis=1)
-user_anime_matrix['number of ratings'] = user_anime_matrix_normalized.count(axis=1)
-
-# remove lesser seen anime
-min_threshold = len(top_users) * 0.3 * 0.5
-user_anime_matrix = user_anime_matrix[user_anime_matrix['number of ratings'] > min_threshold]
-
-# remove anime on the users list
-user_anime_matrix = user_anime_matrix[~user_anime_matrix.index.isin(userList['title'])]
-
-# move the stats columns to the front
-rating_num = user_anime_matrix.pop('number of ratings')
-user_anime_matrix.insert(0, 'number of ratings', rating_num)
-mean_zscore = user_anime_matrix.pop('mean z-score')
-user_anime_matrix.insert(0, 'mean z-score', mean_zscore)
-
-# sort by mean z-score
-user_anime_matrix = user_anime_matrix.sort_values(by='mean z-score', ascending=False)
-
-animeAverageScoreQuery = '''
-query GetAnimeAverageScore($animeName: String!) {
-  Media(search: $animeName, type: ANIME) {
-    title {
-      romaji
-    }
-    averageScore
-  }
-}
-'''
-
-import numpy as np
-user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 1.0]
-user_anime_matrix['anilist score'] = np.nan
-aniist_scores = user_anime_matrix.pop('anilist score')
-user_anime_matrix.insert(1, 'anilist score', aniist_scores)
-
-# iterate through each row in the user anime matrix
-for index, row in user_anime_matrix.iterrows():
-    # get the anime name
-    animeName = index
-    # Define our query variables and values that will be used in the query request
-    variables = {
-        'animeName': animeName
-    }
-    # Make the HTTP Api request to get the average score of the anime
-    response = requests.post(url, json={'query': animeAverageScoreQuery, 'variables': variables}).json()
-    averageScore = response['data']['Media']['averageScore']
-    time.sleep(1)
-    # If the average score is null, skip the anime
-    if averageScore is not None:
-        # Assign the average score to the 'anilist score' column directly
-        user_anime_matrix.at[index, 'anilist score'] = averageScore
-
-print(user_anime_matrix)
-
-
-# get the average score for the entire matrix
-user_anime_matrix['average score diff'] = user_anime_matrix['average score'] - user_anime_matrix['anilist score']
-
-user_anime_matrix['Recommendation Score'] = 2 * user_anime_matrix['mean z-score'] + user_anime_matrix['average score diff'] * 0.2
-
-# normalized based on the max recommendation score
-user_anime_matrix['Recommendation Score'] = user_anime_matrix['Recommendation Score'] / user_anime_matrix['Recommendation Score'].max() * 100
-
-# sort by recommendation score
-user_anime_matrix = user_anime_matrix.sort_values(by='Recommendation Score', ascending=False)
-
-rec_score = user_anime_matrix.pop('Recommendation Score')
-user_anime_matrix.insert(0, 'Recommendation Score', rec_score)
-
-user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
-
 
 #  Yes, there are several ways to make this code more efficient. Here are a few suggestions:
 
@@ -782,5 +758,43 @@ user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index
 
 # By implementing these suggestions, you can make the code more efficient and reduce its computational overhead.
 
+def main():
+    profile = cProfile.Profile()
+    profile.enable()
+    ## TO DO ADD SHARED 10s to config
+
+    init()
+    userList = get_global_user_list()
+    create_database_structure()
+
+    if options['batch_file'] == "True":
+        calculate_user_stats_from_file(userList)
+
+    if options['api_single'] == "True":
+        user_to_add = options['api_username_to_add']
+        get_user_api_stats_and_insert(user_to_add, userList)
+    
+    if options['update_top_100'] == "True":
+        update_top_100(userList)
+
+    # if generate recs is true, that should be the last thing
+    if(generate_recommendations == "True"):
+        generate_recommendations()
+    
+    # show_neighbors_in_db()
+
+   
+
+    profile.disable()
+    s = io.StringIO()
+    ps = pstats.Stats(profile, stream=s).sort_stats('tottime')
+    ps.print_stats()
+
+    with open('profile.txt', 'w+') as f:
+        f.write(s.getvalue())
+
+    sys.exit()
 
 
+if __name__ == "__main__":
+    main()
