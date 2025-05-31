@@ -586,8 +586,10 @@ def show_neighbors_in_db():
         """, (global_username,))
         
         results = cursor.fetchall()
-        for row in results:
-            print(row)
+        with open(f"Results/{global_username}_neighbors.csv", 'w', newline='') as csvfile:
+            for row in results:
+                print(row)
+                csvfile.write(','.join(map(str, row)) + '\n')
     except MySQLdb.Error as e:
         print(f"Error fetching from database: {e}")
     finally:
@@ -629,11 +631,11 @@ def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_na
     # brett_value = get_brett_value(merged_data)
     # end = time.time()
     # print("got brett value {} in {} seconds".format(brett_value, end - start))
-    start = time.time()
-    brett_value = get_brett_value_new(merged_data)
-    end = time.time()
+    # start = time.time()
+    # brett_value = get_brett_value_new(merged_data)
+    # end = time.time()
     # print("got brett value2 {} in {} seconds".format(brett_value, end - start))
-
+    brett_value = 0
 
     
     # Find the users new mean after merging
@@ -694,7 +696,185 @@ def get_user_api_stats_and_insert(username, userList):
     #     print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
     calculate_scores(stats_df)
 
+# add all of the users this user follows to the database
+def expand_from_user(userList, username):
+    queryAllFollowing = '''
+    query ($page: Int, $userId: Int!) {
+        Page(page: $page) {
+            pageInfo {
+            lastPage
+            }
+            following(userId: $userId) {
+            name
+            id
+            }
+        }
+        }
+    '''
+    queryUserId = '''
+    query($name:String){User(name:$name){id}}
+    '''
+    variablesUserId = {
+        'name': username
+    }
 
+    url = 'https://graphql.anilist.co'
+
+    time.sleep(2.5)
+    # Make the HTTP Api request to get the user id of the username
+    response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
+    print("response", response)
+    user_id = response['data']['User']['id']
+
+    for i in range(1, 20):
+        variables = {
+            'userId': user_id,
+            'page': i
+        }
+        print("page ", i)
+        time.sleep(2.5)
+        response = requests.post(url, json={'query': queryAllFollowing, 'variables': variables}).json()
+        last_page = response['data']['Page']['pageInfo']['lastPage']
+        if i > last_page:
+            break
+        for user in response['data']['Page']['following']:
+            time.sleep(2)
+            following_user_id = user['id']
+            following_username = user['name']
+            list = getUserListFromAPI(following_user_id)
+            if list is None:
+                print("Error2: No response from API for user", following_username)
+                return None
+            print(list)
+
+            # get user stats and add them
+            stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
+            get_neighbor_stats_from_list(stats_df, list, userList, following_username)
+            calculate_scores(stats_df)
+
+def expand_top_100(userList):
+    connection = None
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        
+        # Select all neighbors for the given user
+        cursor.execute("""
+            SELECT * FROM anineighbors.user_neighbors
+            WHERE reference_username = %s
+            ORDER BY similarity_score DESC
+            LIMIT 200;
+        """, (global_username,))
+        
+        results = cursor.fetchall()
+        found = False
+        for row in results:
+            username = row[2]
+            if username == "brettyoshi9" or username == "hyougotou" or username == "higui" or username == "Problem02" or username == "MrRaindropDa":
+                continue
+            if username == "RideIsAfraid":
+                found = True
+            if not found:
+                continue
+            
+            print("expanding user", username)
+            expand_from_user(userList, username)
+    except MySQLdb.Error as e:
+        print(f"Error fetching from database: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()    
+
+def top_100_brett(userList):
+    connection = None
+    try:
+        connection = MySQLdb.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name
+        )
+        cursor = connection.cursor()
+        
+        # Select all neighbors for the given user
+        cursor.execute("""
+            SELECT * FROM anineighbors.user_neighbors
+            WHERE reference_username = %s
+            ORDER BY similarity_score DESC
+            LIMIT 200;
+        """, (global_username,))
+        
+        results = cursor.fetchall()
+        with open(f"Results/{global_username}_top_100_brett_values.csv", 'w', newline='') as csvfile:
+            for row in results:
+                username = row[2]
+                print("getting brett value of user", username)
+                # Make query to get user Id
+                url = 'https://graphql.anilist.co'
+                queryUserId = '''
+                query($name:String){User(name:$name){id}}
+                '''
+                variablesUserId = {
+                    'name': username.strip()
+                }
+                response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
+                response_json = response_raw.json()
+                print("response", response_json)
+                if response_json is None or response_json['data'] is None or response_json['data']['User'] is None:
+                    if response_json and response_json['errors'][0]['message'] == "Too Many Requests.":
+                        while(True):
+                            print("Too many requests, sleeping")
+                            time.sleep(30)
+                            response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
+                            response_json = response_raw.json()
+                            if response_json is not None and response_json['data'] is not None and response_json['data']['User'] is not None:
+                                break
+                            elif response_json and response_json['errors'][0]['message'] != "Too Many Requests.":
+                                print("Error: No response from API for userId", username)
+                                return None
+
+                    else:
+                        print("Error4: No response from API for userId", username)
+                        return None
+                userid = response_json['data']['User']['id']
+                print("user id for user ", username, "is", userid)
+                time.sleep(2.5)
+
+                # get list of user
+                neighbor_list = getUserListFromAPI(userid)
+                if neighbor_list is None:
+                    print("Error2: No response from API for user", username)
+                    return None
+                print(neighbor_list)
+                merged_data = pd.merge(neighbor_list, userList, on='media_id', how='left')
+
+                # Remove NaNs
+                merged_data = merged_data.dropna()
+
+                # Remove Duplicates
+                merged_data = merged_data.drop_duplicates(subset='media_id', keep='first')
+
+                # Sort by title_x
+                merged_data = merged_data.sort_values(by='score_y')
+
+                brett_value = get_brett_value_new(merged_data)
+                anime_count = len(merged_data)
+                print("brett value for user", username, "is", brett_value)
+                csvfile.write(f"{username},{anime_count},{brett_value}\n")
+
+
+    except MySQLdb.Error as e:
+        print(f"Error fetching from database: {e}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()    
 
 def update_top_100(userList):
     connection = None
@@ -777,11 +957,18 @@ def main():
     if options['update_top_100'] == "True":
         update_top_100(userList)
 
+    if options['expand_top_100'] == "True":
+        expand_top_100(userList)
+    
+    if options['expand_from_user'] == "True":
+        user_to_expand = options['expand_username']
+        expand_from_user(userList, user_to_expand)
+
     # if generate recs is true, that should be the last thing
     if(generate_recommendations == "True"):
         generate_recommendations()
     
-    # show_neighbors_in_db()
+    show_neighbors_in_db()
 
    
 
