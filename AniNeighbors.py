@@ -74,19 +74,7 @@ def init():
     global_user_anime_count = -1
 
 def get_global_user_list():
-    queryUserId = '''
-    query($name:String){User(name:$name){id}}
-    '''
-
-    # Define our query variables and values that will be used in the query request
-    variablesUserId = {
-        'name': global_username
-    }
-
-    # Make the HTTP Api request to get the user id of the username
-    response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
-    global_user_id = response['data']['User']['id']
-
+    global_user_id = get_user_id_from_username(global_username)
     userList = getUserListFromAPI(global_user_id)
     return userList
 
@@ -626,7 +614,7 @@ def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_na
     # Find the hoh value
     hoh_value = get_hoh_value(merged_data)
 
-    # TO DO: TEST TO MAKE SURE THIS WORKS; ALSO THIS IS SUPER SLOW FIX IT
+    
     start = time.time()
     # brett_value = get_brett_value(merged_data)
     # end = time.time()
@@ -648,7 +636,8 @@ def get_neighbor_stats_from_list(stats_df, neighbor_list, user_list, neighbor_na
     pearson = ratings_df.corr(method='pearson')['score_x']['score_y']
     stats_df.loc[neighbor_name] = [neighbor_name, anime_count, meanscore, user_mean_diff, mean_diff, hoh_value, pearson, shared_10s / total_10s, brett_value]
 
-def get_user_api_stats_and_insert(username, userList):
+
+def get_user_id_from_username(username):
     # Make query to get user Id
     url = 'https://graphql.anilist.co'
     queryUserId = '''
@@ -677,6 +666,13 @@ def get_user_api_stats_and_insert(username, userList):
             print("Error4: No response from API for userId", username)
             return None
     userid = response_json['data']['User']['id']
+    return userid
+
+def get_user_api_stats_and_insert(username, userList):
+    userid = get_user_id_from_username(username)
+    if userid is None:
+        print("Error1: No response from API for user", username)
+        return None
     print("user id for user ", username, "is", userid)
     time.sleep(2.5)
 
@@ -690,10 +686,6 @@ def get_user_api_stats_and_insert(username, userList):
     # get user stats and add them
     stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
     get_neighbor_stats_from_list(stats_df, list, userList, username)
-    # if(user_count % 10 == 0):
-    #     end = time.time()
-    #     avg = (end - start) / user_count
-    #     print("time left: ", avg * (len(AnimeListsFromFile) - user_count) / 60, " minutes")
     calculate_scores(stats_df)
 
 # add all of the users this user follows to the database
@@ -711,21 +703,10 @@ def expand_from_user(userList, username):
         }
         }
     '''
-    queryUserId = '''
-    query($name:String){User(name:$name){id}}
-    '''
-    variablesUserId = {
-        'name': username
-    }
-
-    url = 'https://graphql.anilist.co'
-
-    time.sleep(2.5)
-    # Make the HTTP Api request to get the user id of the username
-    response = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId}).json()
-    print("response", response)
-    user_id = response['data']['User']['id']
-
+    user_id = get_user_id_from_username(username)
+    if user_id is None:
+        print("Error1: No response from API for user", username)
+        return None
     for i in range(1, 20):
         variables = {
             'userId': user_id,
@@ -815,34 +796,10 @@ def top_100_brett(userList):
             for row in results:
                 username = row[2]
                 print("getting brett value of user", username)
-                # Make query to get user Id
-                url = 'https://graphql.anilist.co'
-                queryUserId = '''
-                query($name:String){User(name:$name){id}}
-                '''
-                variablesUserId = {
-                    'name': username.strip()
-                }
-                response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
-                response_json = response_raw.json()
-                print("response", response_json)
-                if response_json is None or response_json['data'] is None or response_json['data']['User'] is None:
-                    if response_json and response_json['errors'][0]['message'] == "Too Many Requests.":
-                        while(True):
-                            print("Too many requests, sleeping")
-                            time.sleep(30)
-                            response_raw = requests.post(url, json={'query': queryUserId, 'variables': variablesUserId})
-                            response_json = response_raw.json()
-                            if response_json is not None and response_json['data'] is not None and response_json['data']['User'] is not None:
-                                break
-                            elif response_json and response_json['errors'][0]['message'] != "Too Many Requests.":
-                                print("Error: No response from API for userId", username)
-                                return None
-
-                    else:
-                        print("Error4: No response from API for userId", username)
-                        return None
-                userid = response_json['data']['User']['id']
+                userid = get_user_id_from_username(username)
+                if userid is None:
+                    print("Error1: No response from API for user", username)
+                    return None
                 print("user id for user ", username, "is", userid)
                 time.sleep(2.5)
 
@@ -907,37 +864,6 @@ def update_top_100(userList):
             cursor.close()
             connection.close()
 
-#  Yes, there are several ways to make this code more efficient. Here are a few suggestions:
-
-#     Use more efficient data structures: The code uses Pandas DataFrames, which are powerful but can be slow for large datasets. Consider using more efficient data structures like NumPy arrays or dictionaries for certain operations.
-#     Avoid unnecessary calculations: The code calculates the mean score of the user's anime watchlist twice (lines 4a and 14k). Consider storing the result of the first calculation and reusing it instead of recalculating it.
-#     Use vectorized operations: Pandas provides vectorized operations that can operate on entire columns or rows at once. Consider using these operations instead of looping through rows or columns.
-#     Reduce the number of merges: The code performs multiple merges (lines 4b and 14b) which can be slow. Consider combining the merge operations into a single operation.
-#     Use more efficient sorting: The code sorts the merged data by the 'score_y' column (line 4e). Consider using a more efficient sorting algorithm like numpy.argsort or pandas.DataFrame.sort_values with the kind parameter set to 'mergesort' or 'quicksort'.
-#     Avoid unnecessary data manipulation: The code drops NaN values (line 4c) and removes duplicates (line 4d) but then recalculates the mean score (line 14k) which may be affected by these operations. Consider performing these operations only when necessary.
-#     Use more efficient correlation calculation: The code calculates the Pearson correlation coefficient using the corr method (line 14m). Consider using a more efficient method like numpy.corrcoef or scipy.stats.pearsonr.
-#     Consider parallelizing: If the dataset is large, consider parallelizing the calculations using libraries like joblib or dask.
-
-
-# These are just a few suggestions, and the actual performance gains will depend on the specific dataset and operations being performed. It's important to profile the code and identify the bottlenecks before making optimizations.
-
-
-#  Yes, there are several ways to make this code more efficient. Here are a few suggestions:
-
-#     Use a consistent naming convention: The code uses both camelCase and snake_case naming conventions. It's better to stick to one convention throughout the code.
-#     Use type hints: The code doesn't have any type hints, which can make it harder to understand the data types being used. Adding type hints can make the code more readable and self-documenting.
-#     Avoid repetitive code: The code has several repeated lines of code, such as the merged_data manipulation steps. Consider extracting these steps into a separate function to reduce code duplication.
-#     Use more efficient data structures: The code uses Pandas DataFrames, which can be efficient for certain operations but may not be the best choice for others. Consider using other data structures, such as NumPy arrays or dictionaries, for certain calculations.
-#     Optimize the merge step: The pd.merge step can be computationally expensive. Consider using a more efficient merge algorithm, such as pd.merge_asof or pd.merge_ordered.
-#     Use vectorized operations: The code uses several loop-based operations, such as the getShared10s and get_hoh_value functions. Consider using vectorized operations, such as Pandas' apply or groupby functions, to reduce computational overhead.
-#     Consider parallelization: If the code is computationally intensive, consider using parallelization techniques, such as joblib or dask, to speed up the calculations.
-#     Simplify the scoring calculation: The scoring calculation involves several steps, including correlation coefficient calculation and normalization. Consider simplifying the scoring calculation to reduce computational overhead.
-#     Use a more efficient sorting algorithm: The code uses the sort_values method to sort the data, which can be slow for large datasets. Consider using a more efficient sorting algorithm, such as quicksort or mergesort.
-#     Profile the code: Use a profiling tool, such as line_profiler or cProfile, to identify the most time-consuming parts of the code. This can help you focus your optimization efforts on the most critical areas.
-
-
-# By implementing these suggestions, you can make the code more efficient and reduce its computational overhead.
-
 def main():
     profile = cProfile.Profile()
     profile.enable()
@@ -963,6 +889,9 @@ def main():
     if options['expand_from_user'] == "True":
         user_to_expand = options['expand_username']
         expand_from_user(userList, user_to_expand)
+    
+    if options['calc_brett_value'] == "True":
+        top_100_brett(userList)
 
     # if generate recs is true, that should be the last thing
     if(generate_recommendations == "True"):
