@@ -59,9 +59,6 @@ def init():
     global users_file
     users_file = dict(config.items('OPTIONS'))['users_file']
     print(users_file)
-    global generate_recommendations
-    generate_recommendations = dict(config.items('OPTIONS'))['recommendations']
-    print(generate_recommendations)
     global options
     options = dict(config.items('OPTIONS'))
     global calculate_all
@@ -158,115 +155,6 @@ def calculate_user_stats_from_file(userList):
     # write the scores to a csv
     scores.to_csv(f'Results/{global_username}_scores.csv', index=False)
 
-def generate_recommendations(): # BROKEN; TO BE FIXED; update this to get users from the DB. Might be something along with top 100 because that requires getting all user lists.
-    # get the score of the user in the second row
-    user_score = scores.iloc[2]['final_score']
-
-    high_users = scores[scores['final_score'] > user_score * 0.7]
-    top_users = high_users['name'].tolist()
-    anime_list = []
-    for username in top_users:
-        user_list = AnimeListsFromFile[username]
-        list_owner = username
-        anime_list = anime_list + user_list['title'].tolist()
-
-    # drop duplicates in anime_list
-    anime_list = list(set(anime_list))
-    print(f"{len(anime_list)} unique anime")
-
-    # make a users x anime matrix using each username and each unique anime
-    user_anime_matrix = pd.DataFrame(columns=anime_list)
-    for username in top_users:
-        list = AnimeListsFromFile[username]
-        user_anime_matrix.loc[username] = [0] * len(anime_list)
-        for index, row in list.iterrows():
-            anime = row['title']
-            user_anime_matrix.loc[username][anime] = row['score']
-
-    # transpose the user anime matrix
-    user_anime_matrix = user_anime_matrix.T
-
-    # turn all the 0s into NaN
-    user_anime_matrix = user_anime_matrix.replace(0, float('nan'))
-
-    # get the z scores for each users anime
-    user_anime_matrix_normalized = user_anime_matrix.apply(lambda x: (x - x.mean()) / x.std(), axis=0)
-    print(user_anime_matrix_normalized)
-
-    # calculate stats
-    user_anime_matrix['average score'] = user_anime_matrix.mean(axis=1)
-    user_anime_matrix['mean z-score'] = user_anime_matrix_normalized.mean(axis=1)
-    user_anime_matrix['number of ratings'] = user_anime_matrix_normalized.count(axis=1)
-
-    # remove lesser seen anime
-    min_threshold = len(top_users) * 0.3 * 0.5
-    user_anime_matrix = user_anime_matrix[user_anime_matrix['number of ratings'] > min_threshold]
-
-    # remove anime on the users list
-    user_anime_matrix = user_anime_matrix[~user_anime_matrix.index.isin(userList['title'])]
-
-    # move the stats columns to the front
-    rating_num = user_anime_matrix.pop('number of ratings')
-    user_anime_matrix.insert(0, 'number of ratings', rating_num)
-    mean_zscore = user_anime_matrix.pop('mean z-score')
-    user_anime_matrix.insert(0, 'mean z-score', mean_zscore)
-
-    # sort by mean z-score
-    user_anime_matrix = user_anime_matrix.sort_values(by='mean z-score', ascending=False)
-
-    animeAverageScoreQuery = '''
-    query GetAnimeAverageScore($animeName: String!) {
-    Media(search: $animeName, type: ANIME) {
-        title {
-        romaji
-        }
-        averageScore
-    }
-    }
-    '''
-
-    import numpy as np
-    user_anime_matrix = user_anime_matrix[user_anime_matrix['mean z-score'] > 1.0]
-    user_anime_matrix['anilist score'] = np.nan
-    aniist_scores = user_anime_matrix.pop('anilist score')
-    user_anime_matrix.insert(1, 'anilist score', aniist_scores)
-
-    # iterate through each row in the user anime matrix
-    for index, row in user_anime_matrix.iterrows():
-        # get the anime name
-        animeName = index
-        # Define our query variables and values that will be used in the query request
-        variables = {
-            'animeName': animeName
-        }
-        # Make the HTTP Api request to get the average score of the anime
-        response = requests.post(url, json={'query': animeAverageScoreQuery, 'variables': variables}).json()
-        averageScore = response['data']['Media']['averageScore']
-        time.sleep(1)
-        # If the average score is null, skip the anime
-        if averageScore is not None:
-            # Assign the average score to the 'anilist score' column directly
-            user_anime_matrix.at[index, 'anilist score'] = averageScore
-
-    print(user_anime_matrix)
-
-
-    # get the average score for the entire matrix
-    user_anime_matrix['average score diff'] = user_anime_matrix['average score'] - user_anime_matrix['anilist score']
-
-    user_anime_matrix['Recommendation Score'] = 2 * user_anime_matrix['mean z-score'] + user_anime_matrix['average score diff'] * 0.2
-
-    # normalized based on the max recommendation score
-    user_anime_matrix['Recommendation Score'] = user_anime_matrix['Recommendation Score'] / user_anime_matrix['Recommendation Score'].max() * 100
-
-    # sort by recommendation score
-    user_anime_matrix = user_anime_matrix.sort_values(by='Recommendation Score', ascending=False)
-
-    rec_score = user_anime_matrix.pop('Recommendation Score')
-    user_anime_matrix.insert(0, 'Recommendation Score', rec_score)
-
-    user_anime_matrix.to_csv(f'Results/{global_username}_recommendations.csv', index=True)
-
 def makeUserDFFromResponse(response, userId):
     global global_user_anime_count
     user = response['data']['User']
@@ -318,7 +206,10 @@ def getUserListFromAPI(userId):
     return userList        
 
 def getShared10s(userList):
-    with open("shared 10s.csv", newline="", encoding='latin1') as csvfile:
+    path = "Shared10s Lists/{username}.txt".format(username=global_username)
+    if not os.path.exists(path): # if a shared 10s file does not exist, use the default
+        path = "shared 10s.csv"
+    with open(path, newline="", encoding='latin1') as csvfile:
         rows = csv.reader(csvfile, delimiter=",", dialect="excel")
         tens_list_lower = [row[0].lower() for row in rows]
         shared_10s = 0
@@ -756,7 +647,7 @@ def expand_top_100(userList):
         found = False
         for row in results:
             username = row[2]
-            if username == "brettyoshi9" or username == "hyougotou" or username == "higui" or username == "Problem02" or username == "MrRaindropDa":
+            if username == "brettyoshi9" or username == "hyogotou" or username == "higui" or username == "Problem02" or username == "MrRaindropDa":
                 continue
             if username == "RideIsAfraid":
                 found = True
@@ -833,7 +724,7 @@ def top_100_brett(userList):
             cursor.close()
             connection.close()    
 
-def update_top_100(userList):
+def update_top_scores(userList):
     connection = None
     try:
         connection = MySQLdb.connect(
@@ -849,14 +740,73 @@ def update_top_100(userList):
             SELECT * FROM anineighbors.user_neighbors
             WHERE reference_username = %s
             ORDER BY similarity_score DESC
-            LIMIT 200;
-        """, (global_username,))
+            LIMIT %s;
+        """, (global_username, int(options['number_top_scores_to_update'])))
         
         results = cursor.fetchall()
+        recommendations = pd.DataFrame(columns=['Anime Name'])
+        user_count = 0
+        user_titles = userList['title'].tolist()
         for row in results:
             username = row[2]
+            if username == global_username or username == "hyoghotou" or username == "higui":
+                continue
             print("updating user", username)
-            get_user_api_stats_and_insert(username, userList)
+            userid = get_user_id_from_username(username)
+            if userid is None:
+                print("Error1: No response from API for user", username)
+                continue
+            print("user id for user ", username, "is", userid)
+            time.sleep(2.5)
+
+            # get list of user
+            list = getUserListFromAPI(userid)
+            if list is None:
+                print("Error2: No response from API for user", username)
+                continue
+            user_count += 1
+
+            # get user stats and add them
+            stats_df = pd.DataFrame(columns='name, anime_count, merged mean, user mean diff, reduces mean by, hoh, pearson, shared10s, brett'.split(', '))
+            get_neighbor_stats_from_list(stats_df, list, userList, username)
+            calculate_scores(stats_df)
+
+            titles = list['title'].tolist()
+            current_titles = recommendations['Anime Name'].tolist()
+            titles = [title for title in titles if title not in current_titles] # Exclude titles already in recommendations
+            titles = [title for title in titles if title not in user_titles]  # Exclude titles already in user's list
+            new_rows = []
+            for title in titles:
+                    new_rows.append({'Anime Name': title})            
+            if new_rows:
+                recommendations = pd.concat([recommendations, pd.DataFrame(new_rows)], ignore_index=True)
+            score_map = dict(zip(list['title'], list['score']))
+            recommendations[username] = recommendations['Anime Name'].map(score_map) # This will create a new column for each user with their scores for the anime in recommendations
+        
+        recommendations['Average Score'] = recommendations.iloc[:, 1:(user_count+1)].mean(axis=1)
+        recommendations['Count'] = recommendations.iloc[:, 1:(user_count+1)].count(axis=1)
+        recommendations['Median Score'] = recommendations.iloc[:, 1:(user_count+1)].median(axis=1)
+        recommendations[' > 80 %'] = recommendations.iloc[:, 1:(user_count+1)].apply(lambda x: (x >= 80).sum(), axis=1) / recommendations['Count']
+        recommendations[' > 90 %'] = recommendations.iloc[:, 1:(user_count+1)].apply(lambda x: (x >= 90).sum(), axis=1) / recommendations['Count']
+        recommendations['100 %'] = recommendations.iloc[:, 1:(user_count+1)].apply(lambda x: (x >= 99).sum(), axis=1) / recommendations['Count']
+        recommendations['Council Score'] = recommendations[' > 80 %'] * 6.4 + recommendations[' > 90 %'] * 7.8 + recommendations['100 %'] * 5.4 + recommendations['Average Score'] / 10 + recommendations['Median Score'] / 10
+        recommendations = recommendations.sort_values(by='Council Score', ascending=False)
+        recommendations = recommendations[recommendations['Count'] >= (user_count * 0.05)] # only keep recommendations with at least 5% of the users rating it
+        recommendations = recommendations[recommendations['Count'] > 2]
+        cols_to_front = [
+            'Council Score',
+            'Average Score',
+            'Median Score',
+            'Count',
+            ' > 80 %',
+            ' > 90 %',
+            '100 %'
+        ]
+        for i, col in enumerate(cols_to_front):
+            col_data = recommendations.pop(col)
+            recommendations.insert(i + 1, col, col_data)  # +1 to keep 'Anime Name' as the first column
+
+        recommendations.to_csv(f'Results/{global_username}_recommendations.csv', index=False)
     except MySQLdb.Error as e:
         print(f"Error fetching from database: {e}")
     finally:
@@ -880,8 +830,8 @@ def main():
         user_to_add = options['api_username_to_add']
         get_user_api_stats_and_insert(user_to_add, userList)
     
-    if options['update_top_100'] == "True":
-        update_top_100(userList)
+    if options['update_top_scores'] == "True":
+        update_top_scores(userList)
 
     if options['expand_top_100'] == "True":
         expand_top_100(userList)
@@ -893,9 +843,6 @@ def main():
     if options['calc_brett_value'] == "True":
         top_100_brett(userList)
 
-    # if generate recs is true, that should be the last thing
-    if(generate_recommendations == "True"):
-        generate_recommendations()
     
     show_neighbors_in_db()
 
