@@ -304,7 +304,10 @@ def get_anime_count_score(stats_df, scores_df):
     # 0.15 - 1
     # 0.3 - 5
     # 0.6 - 10
-    scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(36.6666 * x +  -22.22222 * pow(x, 2) - 4, 10) * float(weights['shared_count_weight']))
+    if stats_df['count_percentage'].iloc[0] < 0.10: # if not enough anime, discard
+        scores_df['anime_count_score'] = -100 * float(weights['shared_count_weight'])
+    else:
+        scores_df['anime_count_score'] = stats_df['count_percentage'].apply(lambda x: min(36.6666 * x +  -22.22222 * pow(x, 2) - 4, 10) * float(weights['shared_count_weight']))
     print(scores_df['anime_count_score'])
     # # Drop the intermediate 'count_percentage' column
     scores_df = stats_df.drop('count_percentage', axis=1)
@@ -616,7 +619,7 @@ def expand_from_user(userList, username):
             list = getUserListFromAPI(following_user_id)
             if list is None:
                 print("Error2: No response from API for user", following_username)
-                return None
+                continue
             print(list)
 
             # get user stats and add them
@@ -830,6 +833,15 @@ def main():
         user_to_add = options['api_username_to_add']
         get_user_api_stats_and_insert(user_to_add, userList)
     
+    if options['api_batch'] == "True":
+        batch_file = options['api_batch_file']
+        with open(batch_file, 'r') as f:
+            usernames = f.read().splitlines()
+            for username in usernames:
+                get_user_api_stats_and_insert(username, userList)
+                time.sleep(2.5)  # Sleep to avoid hitting API rate limits
+
+    
     if options['update_top_scores'] == "True":
         update_top_scores(userList)
 
@@ -844,7 +856,7 @@ def main():
         top_100_brett(userList)
 
     
-    show_neighbors_in_db()
+    # show_neighbors_in_db()
 
    
 
